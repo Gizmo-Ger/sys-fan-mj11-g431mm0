@@ -316,7 +316,7 @@ Static BIOS or flash-chip content should match byte for byte. Live BMC dumps may
 
 This is separate from the identity fix.
 
-After the `SYS_FAN` sensors are enabled, the fan curve is stored in a plain JSON document. Download it from the web interface under **Thermal → Fan Profile**, edit it locally, and upload it again through the web interface.
+After the `SYS_FAN` sensors are enabled, the fan curve is stored in a plain JSON document. Download it from the web interface under **Settings → Fan Profile**, edit it locally, and upload it again through the web interface.
 
 No SSH access or Redfish PATCH operations are required for this step. The identity correction is the difficult part; editing the fan curve itself is straightforward.
 

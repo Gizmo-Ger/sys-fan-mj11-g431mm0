@@ -201,7 +201,7 @@ a bad read.
 ## Tuning the fan curve itself (separate from the identity fix)
 
 Once `SYS_FAN` sensors are unlocked, the curve that drives them is a plain JSON
-document — download it from the webui (Thermal → Fan Profile), edit locally,
+document — download it from the webui (Settings → Fan Profile), edit locally,
 re-upload via webui. No SSH, no Redfish PATCH juggling needed; the identity fix
 above is what's hard, this part is easy.
 
