@@ -339,14 +339,26 @@ the signed, read-only main firmware image.
 
 **Fix** — same extract → edit → repack → write pipeline used for `SKU.xml`
 in this repo generalizes directly: pull the JFFS2 partition apart, drop the
-`DenyUsers` line, repack with `mkfs.jffs2`, push it back. In-place on a live
-board with busybox, the file can be edited directly and the running `sshd`
-re-exec'd to pick it up:
+`DenyUsers` line, repack with `mkfs.jffs2`, push it back.
+
+**If you already have a shell on the board through some other channel** —
+serial-over-LAN (SOL) or the physical UART console (these authenticate
+through `login`/`pam_withunix`, not `sshd`, so `DenyUsers` never applies to
+them) — the file can be edited in place and `sshd` re-exec'd to pick it up
+without a reflash:
 
 ```sh
 sed -i '/DenyUsers sysadmin/d' /etc/ssh/ssh_server_config
 kill -HUP $(cat /var/run/sshd.pid)
 ```
+
+This does **not** work over SSH itself — SSH is exactly what's locked out,
+so there's no shell to run it from until you already have one some other
+way. Root isn't a usable shortcut either: on the boards checked, `/etc/shadow`
+has no entry for `root` at all and `root`'s `.ssh/` is empty, so root login
+isn't practically available despite `PermitRootLogin yes`. If SOL/serial
+isn't available on your board, the offline JFFS2 repack path above is the
+only route.
 
 Still open: whether `-restore` already touches this file on its own (it's
 documented as restoring "users" config while skipping FRU/SKU identity —
