@@ -1,8 +1,12 @@
 # Enabling SYS_FAN Sensors on Gigabyte MJ11-EC1/G431-MM0 BMC (AMI MegaRAC, AST2500)
 
 Credit to PeterF, who first documented the underlying identity-gating issue
-on ServeTheHome (January 2024):
+on ServeTheHome (January 2024), and later explored a different workaround
+for SSH being locked out on newer firmware (April 2024, editing
+`passwd`/`shadow` directly on the writable `/conf` partition — this repo's
+Path B takes a different, fully offline route to the same problem):
 https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-407547
+https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-424378
 (profile: https://forums.servethehome.com/index.php?members/peterf.2796/)
 
 Also credit to Oliver Obenland, who wrote up the same issue independently
