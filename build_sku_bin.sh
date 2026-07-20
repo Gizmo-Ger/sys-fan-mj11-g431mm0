@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Credit to Oliver Obenland for the original identity-gating discovery on
-# this board family:
+# Credit to Oliver Obenland and PeterF, who independently wrote up the
+# underlying identity-gating issue on this board family (unclear who found
+# it first):
 # https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
+# https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-407547
 #
 # Compiles a Gigabyte BMC SKU.xml into a flashable SKU.BIN, with no SSH access
 # to any BMC required. Extracts SKU.xml from a config backup, applies the

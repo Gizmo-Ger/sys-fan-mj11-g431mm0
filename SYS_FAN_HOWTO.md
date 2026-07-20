@@ -1,8 +1,13 @@
 # Enabling SYS_FAN Sensors on Gigabyte MJ11-EC1/G431-MM0 BMC (AMI MegaRAC, AST2500)
 
-Credit to Oliver Obenland, who first identified and wrote up the underlying
+Credit to Oliver Obenland, who identified and wrote up the underlying
 identity-gating issue on this board:
 https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
+
+Also credit to PeterF, who independently wrote up the same issue on
+ServeTheHome (unclear who found it first):
+https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-407547
+(profile: https://forums.servethehome.com/index.php?members/peterf.2796/)
 
 ## Background
 
