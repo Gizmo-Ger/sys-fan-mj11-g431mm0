@@ -30,3 +30,10 @@ The BMC ties `SYS_FAN` presence-detection to the board's reported
 hardware-compatible sibling SKU (e.g. `MJ11-EC0-00`) unlocks the sensors as a
 side effect. See `SYS_FAN_HOWTO.md` for the full explanation and
 `QUICKSTART.md` to just get it done.
+
+## Open question — help wanted
+
+The `sysadmin` SSH lockout on newer firmware looks like it might be just a
+`DenyUsers sysadmin` line in a config file, not an actually-disabled account
+— unverified, see "Open questions" in `SYS_FAN_HOWTO.md`. If you have SSH
+still open on your board and want to test it, open an issue.

@@ -310,3 +310,32 @@ at similar temperatures.
   "Two tools, two very different behaviors" above. Root cause was BMC-gated
   power sequencing, not flash corruption — `-dump` is read-only and cannot
   corrupt anything.
+
+## Open questions (unverified, worth independent testing)
+
+**The `sysadmin` SSH lockout on newer firmware may not require any exotic
+fix.** While poking through the extracted config partition, `sysadmin`
+turned out to *not* be disabled at the account level — the `passwd` entry is
+intact (UID 0, GID 0) and `shadow` has a normal, unlocked password hash. The
+only thing blocking login is a single line in `ssh_server_config`:
+
+```
+DenyUsers sysadmin
+```
+
+That file lives in the same writable JFFS2 config partition as `SKU.xml` —
+not the signed, read-only main firmware image. This is unverified, but two
+things are worth testing if you have a board to spare:
+
+1. Does `-restore` already touch this file? The tool is documented (by
+   Gigabyte's own behavior, see above) as restoring "users" configuration
+   while deliberately skipping FRU/SKU identity — `ssh_server_config` might
+   already fall under "users" and get restored as-is with the edit intact.
+2. If not, the same extract → edit → repack → write pipeline used for
+   `SKU.xml` in this repo should generalize: pull the JFFS2 partition apart,
+   remove the `DenyUsers` line, repack with `mkfs.jffs2`, and push it back.
+
+If you have SSH still open on your board (older firmware) and want to test
+either of these, or have already solved this a different way, please open an
+issue — would rather point people at a working fix than have everyone
+rediscover this independently.
