@@ -337,17 +337,24 @@ Everything else (PAM stack, nsswitch, passwd/shadow layout) matches. That
 file lives in the same writable JFFS2 config partition as `SKU.xml` — not
 the signed, read-only main firmware image.
 
-**Fix** — same extract → edit → repack → write pipeline used for `SKU.xml`
-in this repo generalizes directly: pull the JFFS2 partition apart, drop the
-`DenyUsers` line, repack with `mkfs.jffs2`, push it back via `-sku`.
+**Fix** — pull the JFFS2 config partition apart, drop the `DenyUsers` line,
+repack with `mkfs.jffs2`, write it back.
 
-No extra reload step needed for this route: `sshd` is already running on
-port 22 for everyone — `DenyUsers` only filters the `sysadmin` user at auth
-time, it doesn't stop the daemon. And applying `-sku` already triggers a BMC
-reset (see the gotcha above), which restarts `sshd` with the edited config
-as a side effect. SSH access for `sysadmin` should just work as soon as the
-board comes back up from that reset — no manual `kill -HUP` required on
-this path.
+**Correction**: an earlier version of this section said this "generalizes
+directly" from the `SKU.xml` pipeline via `-sku` — that's not accurate.
+`build_sku_bin.sh`'s `-sku` route only ever compiles and writes back the
+single `SKU.xml` record through `bmcprog`; it's not a full-partition
+rewrite, so it can't carry an `ssh_server_config` edit along with it (more
+on why in the note below). Writing back a fully repacked JFFS2 config
+partition needs whatever `gigaflash` write mode actually accepts a whole
+partition image — not `-sku` — which hasn't been identified/verified here
+yet. Until that's nailed down, this route is unverified; the SOL/serial
+in-place edit below is the only confirmed-working method.
+
+If a full-partition write mode is confirmed to work: `sshd` is already
+running on port 22 for everyone — `DenyUsers` only filters the `sysadmin`
+user at auth time, it doesn't stop the daemon — so no extra reload step
+should be needed beyond whatever reset that write mode triggers.
 
 **If you already have a shell on the board through some other channel** —
 serial-over-LAN (SOL) or the physical UART console (these authenticate
@@ -373,6 +380,17 @@ documented as restoring "users" config while skipping FRU/SKU identity —
 `ssh_server_config` may already fall under "users" and survive a restore
 with the edit intact). Untested — if you've tried it, open an issue with
 the result.
+
+**Why this isn't a `build_sku_bin.sh` flag**: it might look like an obvious
+addition — the script already extracts and parses this same JFFS2 config
+partition to get at `SKU.xml`, so an `--enable-ssh` switch seems like a
+natural bolt-on. It isn't, for the reason above: the script's whole output
+path (`bmcprog` → `SKU.BIN` → `gigaflash -sku`) is scoped to that one XML
+record, not the partition as a whole. There's no full-partition repack step
+in that script to hook an `ssh_server_config` edit into — adding one would
+mean building and verifying a separate write mechanism, which is exactly
+the open, unverified question above. So this stays a manual, documented
+fix rather than a script flag.
 
 ## The missing web-UI SSH controls are cosmetic, not functional
 
