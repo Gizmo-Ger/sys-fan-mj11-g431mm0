@@ -339,7 +339,15 @@ the signed, read-only main firmware image.
 
 **Fix** — same extract → edit → repack → write pipeline used for `SKU.xml`
 in this repo generalizes directly: pull the JFFS2 partition apart, drop the
-`DenyUsers` line, repack with `mkfs.jffs2`, push it back.
+`DenyUsers` line, repack with `mkfs.jffs2`, push it back via `-sku`.
+
+No extra reload step needed for this route: `sshd` is already running on
+port 22 for everyone — `DenyUsers` only filters the `sysadmin` user at auth
+time, it doesn't stop the daemon. And applying `-sku` already triggers a BMC
+reset (see the gotcha above), which restarts `sshd` with the edited config
+as a side effect. SSH access for `sysadmin` should just work as soon as the
+board comes back up from that reset — no manual `kill -HUP` required on
+this path.
 
 **If you already have a shell on the board through some other channel** —
 serial-over-LAN (SOL) or the physical UART console (these authenticate
