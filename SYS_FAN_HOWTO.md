@@ -420,3 +420,17 @@ path, `ManagerNetworkProtocol`/SSH Redfish object, the daemon itself) fully
 functional — consistent with the actual lockout being nothing more than the
 single `DenyUsers sysadmin` line covered above. Nothing else in the stack —
 not PAM, not the IPMI user DB, not Redfish/Redis — is holding anything back.
+
+As a final check, a `PATCH` to `SSH/ProtocolEnabled` (via `If-Match` with a
+fresh ETag) was sent to the same production endpoint to confirm the write
+path, not just the read path, is live:
+
+```json
+{"error":{"@Message.ExtendedInfo":[{"Message":"Cannot patch the value which already applied","MessageArgs":["true","SSH/ProtocolEnabled"],"MessageId":"SyncAgent.1.0.PatchValueAlreadyExists"}]}}
+```
+
+`PatchValueAlreadyExists` is the exact string found in the compiled Lua
+earlier — the ETag precondition passed and the handler evaluated the request
+for real, then rejected it only because `true` was already the current value.
+That's full end-to-end confirmation the backend is a live, functional
+resource, not a UI stub sitting in front of something removed.
