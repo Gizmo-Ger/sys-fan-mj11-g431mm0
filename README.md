@@ -4,10 +4,11 @@ Unlocking `SYS_FAN` sensors (and setting up custom fan curves) on Gigabyte
 MJ11-EC1 baseboards shipped inside G431-MM0-family chassis, where the BMC
 firmware gates fan presence-detection on the reported product identity.
 
-Credit to Oliver Obenland and PeterF, who independently wrote up the
-underlying issue (unclear who found it first):
-- https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
+Credit to PeterF, who first documented the underlying issue on ServeTheHome
+(January 2024), and Oliver Obenland, who wrote it up independently
+(February 2024):
 - https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-407547
+- https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
 
 ## Files
 

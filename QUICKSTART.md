@@ -4,10 +4,10 @@ Practical companion to `SYS_FAN_HOWTO.md` (that one has the full why; this one
 is just the commands). For Gigabyte MJ11-EC1/G431-MM0-family boards with BMC
 SSH disabled.
 
-Credit to Oliver Obenland and PeterF, who independently wrote up the
-underlying identity-gating issue (unclear who found it first):
-https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
+Credit to PeterF (ServeTheHome, Jan 2024) and Oliver Obenland (Feb 2024,
+independently), who documented the underlying identity-gating issue:
 https://forums.servethehome.com/index.php?threads/gigabyte-mj11-ec1-epyc-3151-mystery.41395/post-407547
+https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
 
 ## What you need before starting
 
