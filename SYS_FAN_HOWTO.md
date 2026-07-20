@@ -373,3 +373,50 @@ documented as restoring "users" config while skipping FRU/SKU identity —
 `ssh_server_config` may already fall under "users" and survive a restore
 with the edit intact). Untested — if you've tried it, open an issue with
 the result.
+
+## The missing web-UI SSH controls are cosmetic, not functional
+
+On the production board's web UI, **Settings → Services** (which on the
+spare board has an SSH enable/disable toggle) is missing entirely, and
+**Settings → User Management** is missing the "Existing SSH Key / Upload SSH
+Key / Delete" fields for the `admin` user. Both turned out to be UI-only
+removals — the backend for each is fully intact and functional on production:
+
+- **SSH-key field**: AMI's own IPMI user database (`UserConfig.ini`,
+  `UserEncPswd.ini`, `FixedUserInfo.ini` under `/conf/BMC1/`) has no SSH-key
+  fields at all, on either board — the upload feature was never backed by
+  that database. It's plain OpenSSH convention
+  (`AuthorizedKeysFile /conf/user_home/%u/.ssh/authorized_keys`), and that
+  exact path/file already exists on production, empty, identical to the
+  spare board. The storage location the button would write to is there;
+  only the button is gone.
+
+- **Services SSH toggle**: the backend is the standard Redfish
+  `ManagerNetworkProtocol` resource. Querying it directly on production,
+  bypassing the web UI entirely, confirms it's alive and SSH is already on:
+
+  ```powershell
+  curl.exe -k -u admin:<password> https://<production-ip>/redfish/v1/Managers/Self/NetworkProtocol
+  ```
+
+  returns (trimmed):
+  ```json
+  "SSH": { "Port": 22, "ProtocolEnabled": true }
+  ```
+
+  Digging into the compiled Lua behind it
+  (`/usr/local/redfish/redfish/manager/network-protocol.lua` — binary
+  bytecode, read with `grep -a` since `cat` mangles the terminal) shows a
+  fully implemented property: `SSH.Port`, `SSH.ProtocolEnabled`, PATCH
+  support with type validation, backed by a Redis key
+  (`Redfish:Managers:Self:NetworkProtocol:SSH`, matching the
+  `redis-dump.rdb.gz` / `RedisdbChecksum` files already present in the
+  config partition). None of this lives in any `.ini` file — it's Redis
+  state, a separate subsystem from everything else checked in this doc.
+
+**Net effect**: on production firmware, Gigabyte pulled the web-UI control
+surface for both of these but left the underlying mechanisms (`authorized_keys`
+path, `ManagerNetworkProtocol`/SSH Redfish object, the daemon itself) fully
+functional — consistent with the actual lockout being nothing more than the
+single `DenyUsers sysadmin` line covered above. Nothing else in the stack —
+not PAM, not the IPMI user DB, not Redfish/Redis — is holding anything back.
