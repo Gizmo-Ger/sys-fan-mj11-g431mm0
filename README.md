@@ -11,8 +11,6 @@ issue: https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern
 
 - **[SYS_FAN_HOWTO.md](SYS_FAN_HOWTO.md)** — the full writeup: root cause, all
   gotchas, both the SSH and no-SSH paths, and fan-curve tuning.
-- **[SYS_FAN_HOWTO_formatted.md](SYS_FAN_HOWTO_formatted.md)** — same content,
-  alternate formatting.
 - **[QUICKSTART.md](QUICKSTART.md)** — condensed, command-first version: just
   the steps and expected output.
 - **[build_sku_bin.sh](build_sku_bin.sh)** — automates the no-SSH path:
