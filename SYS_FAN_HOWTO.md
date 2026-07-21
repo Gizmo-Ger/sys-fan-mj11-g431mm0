@@ -508,7 +508,15 @@ no cramfs userspace extractor needed). Findings:
   below.** There's a way to make SSH survive reboots that never touches
   the signed rootfs at all.
 
-## A persistent fix without touching the signed firmware: `@reboot` cron
+## A persistent fix without touching the signed firmware: `@reboot` cron (UNCONFIRMED — live test raised doubts, read before trying this)
+
+**Status: this does not yet have a working confirmation. Live-tested on
+the spare board (12.49.06, see results below) and it did not behave as
+the reasoning below predicted. Don't rely on this for production without
+resolving that first.** Keeping the reasoning in place because the pieces
+it's built on are individually confirmed real (see below) — but something
+about how they fit together isn't right yet, and it's not safe to assume
+this "just works" until that's understood.
 
 The `/etc/init.d/ssh start` trick above gets SSH working immediately, but
 only until the next reboot, because the boot-time kill lives in the
@@ -586,6 +594,56 @@ config partition.
 succeed without needing console access again. If it doesn't, check
 `/var/log/cron.log` (or wherever this board routes cron's log output) via
 console for whether the `@reboot` line actually fired.
+
+### Live test on spare (12.49.06) — inconclusive, and it raised a bigger question
+
+Before touching production with this, tested it on the spare board over
+SSH (which already has a real, long-standing `@reboot` entry for
+`logrotate` in its own `/conf/crontab`). Backed up `/conf/crontab` first;
+everything below was cleaned up and the original file restored afterward
+(verified by hash) — spare was left exactly as found.
+
+What happened:
+
+- Appended a harmless test line (`@reboot sysadmin echo ... >>
+  /tmp/reboot_test.log`), then removed `/var/run/crond.reboot` and ran
+  `/etc/init.d/cron restart` to force a re-check without a real reboot.
+  The job did **not** run. Pulling strings from the actual `/usr/sbin/cron`
+  binary explains why: it contains `"Skipping @reboot jobs -- not system
+  startup"` alongside `"Running @reboot jobs"` — this cron build
+  deliberately detects genuine system boot vs. a mere process restart, and
+  correctly refused to treat our forced restart as the real thing. That
+  part is reassuring, not concerning — it means the gating logic is
+  real and intentional, and a true reboot should still trigger it.
+
+- To rule out a live-reload quirk instead, tried a plain `* * * * *`
+  (every-minute, no `@reboot` involved at all) test line, added fresh and
+  followed by a full `/etc/init.d/cron restart` — this should have nothing
+  to do with the startup-detection logic above. It never fired either,
+  checked over 130+ seconds (well past two minute boundaries).
+
+- Went further and checked whether cron's **own pre-existing** minute job
+  (`logrotate`, present in the stock crontab, no editing involved at all)
+  was actually running: `/var/lib/logrotate/` has never contained a status
+  file, and polling `ps -ef` every 5 seconds for a full 60 seconds never
+  once caught a `logrotate` process. No `/etc/cron.allow` or
+  `/etc/cron.deny` exists to explain a silent block, `sysadmin` is
+  confirmed UID 0, and the crontab file itself is syntactically clean
+  (verified byte-for-byte, no missing newlines, no corruption from the
+  edits).
+
+**Net effect: cron does not appear to be actually executing scheduled
+jobs on this board at all right now, independent of anything this repo
+did to it.** That's a bigger and stranger finding than "the new line
+doesn't work" — it suggests either something about this board's current
+state has cron running but non-functional, or there's a triggering
+mechanism for its job execution that hasn't been identified yet (worth
+checking: does a *genuine* reboot make the difference, the same way it
+does for `@reboot` specifically? Untested — the spare test stopped short
+of an actual reboot). Until this is root-caused, treat the entire
+`@reboot`-cron persistence idea as **unproven**, not as a working fix.
+The one-boot `/etc/init.d/ssh start` method above remains the only
+empirically working method in this document.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
