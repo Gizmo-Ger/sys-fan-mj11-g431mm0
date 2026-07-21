@@ -890,6 +890,80 @@ bar than physical/serial console access. It would not solve persistence
 sections above), but it would make the one-boot workaround usable
 remotely, any time, without hands on the hardware.
 
+## Would a BMC firmware downgrade re-enable SSH, and would it even flash?
+
+If a persistent fix stays out of reach, the obvious blunt alternative is
+downgrading the whole BMC firmware to a version before the lockout ever
+existed. Worth being precise about what's actually confirmed here versus
+still genuinely unknown, since this is a real flash operation — much
+higher stakes than anything else explored in this document so far.
+
+**Would it re-enable SSH? Yes, definitely, if it boots.** Every version
+finding above points the same way: below 12.60.41 there's no `DenyUsers
+sysadmin` line at all; below 12.61.39 `sshd` is never force-stopped by
+`ssh-main`; and `admin` (the account anyone would actually log in as)
+was never blocked by any of this at any version — only the internal
+`sysadmin` account ever was, starting at 12.60.41. So any firmware below
+12.61.39 gets you a normally-running `sshd` with unrestricted `admin`
+login, and below 12.60.41 even `sysadmin` works too. This part isn't in
+doubt.
+
+**Would `gigaflash` even accept an older image? Likely yes.** Checked all
+three host-side tool binaries (`gigaflash`, `gigaflash_x64`,
+`gigaflash_arm`) for any version-comparison/anti-rollback logic —
+found none. What *is* there, right next to Gigabyte's embedded RSA
+public key: the tool's own error strings are `Verify signature fail` /
+`Update fail`, appearing directly after `Loading Firmware...` in the
+flash sequence. That's a **pure cryptographic signature check** —
+authenticity, not recency. An older *official, Gigabyte-signed* firmware
+image should pass this check exactly as well as the current one, since
+it's signed with the same key. (Searched the entire firmware blob too,
+not just the tool, for `downgrade`/`rollback`/`SVN`/"secure version"
+strings — nothing beyond OpenSSL's own unrelated `sslv3 rollback attack`
+boilerplate and a handful of coincidental byte-matches. Absence of a
+string doesn't prove absence of a check, but it's a real negative
+signal.)
+
+**What's still genuinely unknown: whether the board actually *boots*
+that older image afterward.** A signature-only check at flash time says
+nothing about whether `u-boot` (or a separate secure-boot stage) enforces
+a monotonic version/rollback counter before jumping to it — that's a
+different, later checkpoint this investigation hasn't reached. If such a
+check exists and blocks it, the failure mode could range from "refuses
+to boot, falls back automatically" (see below — likely, on this
+hardware) to something worse. This is the real open question, not
+whether `gigaflash` will *write* the older image.
+
+**Why the risk is lower than it sounds on this specific board: it's
+dual-image.** `gigaflash`'s own usage text takes a `-cs <0|1>` address
+argument — 0=Active, 1=Backup — confirmed by `DualImageCfg.ini`
+(`FwUploadSelector`) already present in the config partition. The
+changelog additionally documents, across several versions: a Redfish
+`uploadSelector` supporting `image1`/`image2`/`both`/`autoInactive` for
+"dual image BMC update," an OEM IPMI command to read the *backup* image's
+version specifically, and — most relevant to safety — **an increased
+watchdog (WDT2) timeout specifically for dual-image platforms, described
+as triggering automatically "when some error occurred,"** strongly
+implying an automatic fail-back-to-the-other-bank mechanism if one image
+hangs or fails to come up. That means the sane way to ever try this is:
+flash the older, legitimately-signed firmware to the **backup** bank
+(`-cs 1`) only, leave the current, working 12.61.39 image untouched on
+the active bank, and see whether it boots and whether SSH comes up —
+with the current known-good state never actually at risk unless a
+manual, deliberate switch to the backup bank is made afterward.
+
+**Not attempted, and shouldn't be without more groundwork first**:
+sourcing an actual older, officially-signed firmware image (this repo
+only has 12.61.39 and 12.49.06 — the latter is spare's *current* running
+version, not a spare downgrade target; an older signed image for
+production's exact board model would need to come from Gigabyte's own
+download archive, and its authenticity/signature should be verified
+before ever touching real hardware with it), and understanding the exact
+bank-switch/failover mechanism (GPIO-based per an old changelog entry —
+`"check set gpio low to get second image"` — not yet read in detail)
+well enough to know how to verify the backup bank booted *without*
+already having SSH into it to check.
+
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
 PeterF (see attribution at top) shared further detail via forum PM on his
