@@ -130,11 +130,16 @@ NEED_JEFFERSON=0
 JEFFERSON="jefferson"
 if [ ! -f "$XML" ] && [ -f "$CONFIG_BACKUP" ]; then
   NEED_JEFFERSON=1
-  python3 -m venv --help >/dev/null 2>&1 || {
-    echo "ERROR: python3-venv is required to install jefferson in an isolated environment." >&2
+  # `python3 -m venv --help` succeeds even when the venv module can't
+  # actually create a working environment (e.g. ensurepip missing) — the
+  # only reliable check is to actually create one.
+  VENV_PROBE="$WORK/venv-probe"
+  if ! python3 -m venv "$VENV_PROBE" >/dev/null 2>&1; then
+    echo "ERROR: python3 -m venv is required (to install jefferson in an isolated environment) but failed to create a working venv." >&2
     echo "  On Debian/Ubuntu: sudo apt-get install python3-venv" >&2
     exit 1
-  }
+  fi
+  rm -rf "$VENV_PROBE"
 fi
 
 sudo modprobe cramfs 2>/dev/null || echo "    (cramfs module unavailable — will try mounting anyway; some kernels build it in)"
@@ -196,7 +201,23 @@ from xml.sax.saxutils import escape
 orig_path, out_path, new_product_name, new_fan_profile = sys.argv[1:5]
 old = open(orig_path, encoding='utf-8').read()
 
-def replace_one(text, tag, new_value):
+def replace_all_uniform(text, tag, new_value):
+    # SKU.xml legitimately repeats ProductName in both its <FRU> (live board
+    # data) and <PROJECT> (template) sections. Require every existing
+    # occurrence to already agree with each other before touching any of
+    # them — if they don't, that's pre-existing inconsistency worth failing
+    # loudly on rather than silently picking one.
+    pattern = re.compile(f'(<{tag}>)([^<]*)(</{tag}>)')
+    matches = list(pattern.finditer(text))
+    if not matches:
+        sys.exit(f"ERROR: expected at least one <{tag}> element, found 0")
+    existing_values = {m.group(2) for m in matches}
+    if len(existing_values) != 1:
+        sys.exit(f"ERROR: <{tag}> occurrences disagree with each other before editing: {sorted(existing_values)!r} — refusing to guess which is right")
+    escaped = escape(new_value)
+    return pattern.sub(f'<{tag}>{escaped}</{tag}>', text)
+
+def replace_single(text, tag, new_value):
     pattern = re.compile(f'(<{tag}>)([^<]*)(</{tag}>)')
     matches = list(pattern.finditer(text))
     if len(matches) != 1:
@@ -205,8 +226,8 @@ def replace_one(text, tag, new_value):
     m = matches[0]
     return text[:m.start()] + f'<{tag}>{escaped}</{tag}>' + text[m.end():]
 
-new = replace_one(old, 'ProductName', new_product_name)
-new = replace_one(new, 'FanProfile', new_fan_profile)
+new = replace_all_uniform(old, 'ProductName', new_product_name)
+new = replace_single(new, 'FanProfile', new_fan_profile)
 
 def normalize(text):
     text = re.sub(r'(<ProductName>)[^<]*(</ProductName>)', r'\1\2', text)
@@ -365,6 +386,11 @@ PYEOF
 echo "==> Publishing output"
 if [ -L "$OUT_DIR" ]; then
   echo "ERROR: $OUT_DIR exists and is a symlink — refusing to publish through it." >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR" ] && [ ! -w "$OUT_DIR" ]; then
+  echo "ERROR: $OUT_DIR exists but isn't writable by $(whoami) (e.g. left over from a prior run under sudo)." >&2
+  echo "  Remove or chown it manually, then re-run: rm -rf $OUT_DIR" >&2
   exit 1
 fi
 STAGE_DIR="$(mktemp -d "./sku_build.XXXXXX")"
