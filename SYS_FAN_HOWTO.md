@@ -392,6 +392,57 @@ mean building and verifying a separate write mechanism, which is exactly
 the open, unverified question above. So this stays a manual, documented
 fix rather than a script flag.
 
+## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
+
+PeterF (see attribution at top) shared further detail via forum PM on his
+original investigation, worth recording here for anyone picking up the
+open threads above:
+
+- **`SKU.BIN` format, confirmed independently.** Before tools like
+  `gigaflash -sku` existed, he built `SKU.BIN` files by hand: it's a
+  gzip-compressed `SKU.xml` wrapped in a container with pointers and
+  checksums. Matches this repo's own `build_sku_bin.sh` structure. One
+  caveat worth flagging explicitly: **you can't build a `SKU.BIN` from
+  scratch** — it has to start from a dump of your own board, because
+  board-unique fields (serials, MACs) live inside it. Same constraint this
+  repo already follows (Path B never touches those fields), just confirms
+  it's a hard requirement, not caution.
+
+- **JTAG + serial console** were his main tools for understanding BMC
+  bootup behavior — reading the boot log over UART taught him most of what
+  he knew about the boot sequence. This repo hasn't used JTAG at all; the
+  `sysadmin` lockout work above relied on SOL/Redfish/offline JFFS2
+  extraction instead. Worth keeping in mind as an avenue if a board ever
+  needs lower-level debugging than SOL can offer.
+
+- **Full BMC firmware image: disassembled, patched, never flashed.** He
+  went further than the JFFS2 config-partition work here — took apart the
+  *entire* BMC flash image, rebuilt the filesystems inside it, and added
+  his own hacks directly (telnet, `nc`, extra user/password entries). He
+  could never get it to flash, because he never found a way around the
+  firmware's **signature verification**. This is a different, harder
+  barrier than the config-partition question left open above (that one is
+  about which `gigaflash` write mode accepts a full partition image, not
+  about defeating a signature check on the main firmware itself) — the two
+  shouldn't be conflated.
+
+- **Theory, untested: raw unsigned flash from the u-boot prompt.** His
+  suspicion is that the signature check lives in the normal boot/flash-tool
+  path, not in u-boot itself — so a raw, unsigned image might flash
+  successfully if written directly from the u-boot prompt, bypassing
+  whatever validates it later. He never tested this (only has the one
+  board, and bricking it isn't worth the risk solo). Flagging it here as a
+  lead for anyone with a spare board and UART/JTAG access willing to try —
+  if it works, it's a plausible route to the still-unverified full-partition
+  write mentioned in the SSH lockout section above, and potentially a route
+  to a persistent (reflash-proof) SSH fix instead of the current manual
+  per-boot edit.
+
+- He's run his modified system for **2.5 years continuously** without
+  updating BMC firmware, specifically to keep SSH access — same tradeoff
+  this repo documents (older firmware = SSH still works; newer firmware =
+  locked out via `DenyUsers`).
+
 ## The missing web-UI SSH controls are cosmetic, not functional
 
 On the production board's web UI, **Settings → Services** (which on the
