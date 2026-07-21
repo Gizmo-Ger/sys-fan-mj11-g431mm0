@@ -496,16 +496,85 @@ no cramfs userspace extractor needed). Findings:
   directly (not via `ssh-main`, and without rebooting afterward) starts
   `sshd` and leaves it running — `admin` can then SSH in normally. No
   reflash, no signature bypass, no JFFS2 repack required. The catch: this
-  doesn't survive a reboot, because `ssh-main` runs its `start; stop`
-  sequence again on every boot. Making it persistent means patching
-  `ssh-main` (or the `check_conf_presence` re-injection, if you also want
-  `sysadmin` itself usable) — and that script lives in the **signed,
-  read-only main cramfs rootfs**, not the writable JFFS2 config partition
-  this repo already knows how to edit. Patching it durably runs straight
-  into the same wall PeterF hit with his own full-firmware modifications:
-  the signature check on the main image. His u-boot unsigned-flash theory
-  (below) is the most promising lead for making *this* fix persistent,
-  not just the one-boot version above.
+  by itself doesn't survive a reboot, because `ssh-main` runs its
+  `start; stop` sequence again on every boot, and that script lives in the
+  **signed, read-only main cramfs rootfs** — not something this repo's
+  tooling can patch without defeating the firmware signature check (the
+  same wall PeterF hit with his own full-firmware modifications; see his
+  u-boot theory below).
+
+  **That said, this one-boot version isn't actually the end of the story
+  — see "A persistent fix without touching the signed firmware" right
+  below.** There's a way to make SSH survive reboots that never touches
+  the signed rootfs at all.
+
+## A persistent fix without touching the signed firmware: `@reboot` cron
+
+The `/etc/init.d/ssh start` trick above gets SSH working immediately, but
+only until the next reboot, because the boot-time kill lives in the
+signed main rootfs. But bringing `sshd` back up doesn't have to happen
+*during* that same boot sequence — it just has to happen *some time*
+after `ssh-main` kills it, and cron already gives us exactly that, using
+nothing but the writable JFFS2 config partition this repo's tooling
+already knows how to edit.
+
+**The pieces, all already confirmed present and working on 12.61.39:**
+
+- `/etc/crontab` is a symlink to `/conf/crontab` — i.e. it lives on the
+  writable config partition, not the signed rootfs. Editing it is the
+  same kind of operation as the `SKU.xml`/`ssh_server_config` edits
+  already documented in this file.
+- The cron daemon (`/usr/sbin/cron`, vixie/ISC cron, not busybox `crond`)
+  starts at `S89cron` in the boot sequence — well after `ssh-main` runs
+  its forced `start; stop` at `S16ssh`. Nothing later in `rc3.d` (checked
+  the full ordered listing through `S99zz-rc-init-complete`) touches
+  `sshd` again.
+- `@reboot` support isn't theoretical here — `/conf/crontab` **already
+  has live `@reboot` entries** (for `logrotate`), proving the mechanism
+  is real and actively used by the stock firmware on this exact board.
+- Cron jobs run as whatever user the crontab line specifies, completely
+  independent of `sshd`/PAM — `DenyUsers sysadmin` has no bearing on a
+  cron job, even one that runs as `sysadmin` (confirmed UID 0 already).
+
+**The fix** — add one line to `/conf/crontab`:
+
+```
+@reboot sysadmin sleep 15 && /etc/init.d/ssh start
+```
+
+(the `sleep` is just cheap insurance against any startup-ordering edge
+case; cron already starting at `S89` vs. ssh-main's `S16` should make it
+unnecessary in practice.)
+
+Once that line is in place, `sshd` gets restarted a few seconds into
+every boot, right after cron itself comes up, and nothing downstream
+stops it again — no reflash needed after the one edit, no signature to
+defeat, because the change never touches anything outside the JFFS2
+config partition.
+
+**How to apply it**, in order of preference:
+
+1. **If you already have a live shell** (SOL/UART, or SSH brought up
+   temporarily via the `/etc/init.d/ssh start` trick above): just
+   `echo '@reboot sysadmin sleep 15 && /etc/init.d/ssh start' >>
+   /conf/crontab`, no restart of cron needed — it re-reads `/etc/crontab`
+   on its own (standard vixie-cron behavior), or `kill -HUP $(cat
+   /var/run/crond.pid)` to force it immediately. This is a live edit to
+   flash-backed data, so it's already persistent — done in one shot,
+   never needs repeating.
+2. **If you only have offline JFFS2 access** (no shell at all, board on
+   12.61.39+ with no other console): extend the same `jefferson` extract
+   → edit → `mkfs.jffs2` repack → write-back pipeline this repo already
+   uses for `SKU.xml`, adding this line to the extracted `crontab` file
+   before repacking. This is exactly the "full-partition write mode"
+   question left open elsewhere in this doc — needed here too, since
+   `-sku` only writes the single `SKU.xml` record, not the whole
+   partition.
+
+**Verify it worked**: after a reboot, an SSH connection to `admin` should
+succeed without needing console access again. If it doesn't, check
+`/var/log/cron.log` (or wherever this board routes cron's log output) via
+console for whether the `@reboot` line actually fired.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
