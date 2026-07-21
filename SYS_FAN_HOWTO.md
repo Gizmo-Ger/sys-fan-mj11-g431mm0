@@ -354,7 +354,8 @@ the lockout:
   added but before SSH was removed outright), it could be a legitimate,
   vendor-supported way to re-enable SSH without touching JFFS2 at all —
   worth probing via `ipmitool raw`/OEM command discovery before falling
-  back to the config-partition repack below. Not yet tested here.
+  back to the config-partition repack below. **Found and GET-tested — see
+  "The OEM `AMISetServiceConf` command" further down.**
 - **12.61.27** — `[feature] Hide SSH-related features on Web UI.` This is
   the vendor's own confirmation of the cosmetic UI masking documented
   further down (Services SSH toggle and SSH-key upload fields disappearing
@@ -737,6 +738,99 @@ theory) or "figure out why cron is inert" (still open). If anyone finds
 another angle — a different daemon, a different config file with a
 program-execution hook — it's worth adding to this list either way,
 confirmed or ruled out.
+
+## The OEM `AMISetServiceConf` command — a console-free way to bring SSH up (GET confirmed, SET untested)
+
+The `[feature] Add gbt oem cmd to enable/disable ssh` changelog entry
+(12.60.39, see the version timeline above) turned out to be real, findable,
+and — unlike the cron approach — **doesn't require any console access at
+all**, since it's invoked over IPMI, which is reachable both locally (KCS,
+from whatever host owns the board) and over the network (IPMI-over-LAN,
+port 623 — already confirmed open on both boards via `NetworkProtocol`
+above).
+
+**Where it lives**: `/usr/local/lib/libipmiamioemserviceconf.so` on both
+boards' rootfs (same file size on production 12.61.39 and spare 12.49.06 —
+this feature has been stable across a huge version range). Exported
+symbols `AMIGetServiceConf` / `AMISetServiceConf`, registered in a small
+command table (`g_ServiceConf_CmdHndlr`) found at a fixed offset in the
+library's `.rodata`. The string table in the same library contains, among
+other things, the literal shell commands this thing runs:
+
+```
+sed -i '/DenyUsers sysadmin/d' /conf/ssh_server_config
+/etc/init.d/ssh restart &
+echo DenyUsers s...
+```
+
+— i.e. it's built on exactly the same `check_conf_presence()`-style logic
+already documented above — and a second string,
+`/etc/init.d/ssh force-stop` / `/etc/init.d/ssh start &`, matching a
+generic "restart this service" path shared with other services
+(`hdserver`, etc.) in a sibling library.
+
+**Reverse-engineered from the command table + live GET probing (no
+disassembler needed, just `nm -D`, `readelf`, and raw byte inspection)**:
+
+- **netFn = `0x32`**, **cmd = `0x69`** (Get), **cmd = `0x6a`** (Set) — found
+  by noting `0x32`/`0x69` was the only netFn/cmd pair out of several
+  candidates that returned a *specific* completion code (`0xC7`, request
+  data length invalid) instead of the generic `0xC1` (invalid command)
+  every wrong guess returned.
+- **Request payload = 4 bytes: `[ServiceID, 0x00, 0x00, 0x00]`** — found
+  by testing payload lengths 1–4; only length 4 stopped returning `0xC7`
+  (moved to `0xCC`, invalid data field, meaning the length was now right
+  and only the value was wrong).
+- **ServiceID `0x20` (32) = SSH** — confirmed by decoding the GET response:
+  the returned struct includes a port field that reads `22` (`0x0016`)
+  only for this ID. Other valid IDs found: `0x01`/`0x02`/`0x04`/`0x10`
+  (all web-related services on ports 80/443 — lighttpd, Redfish, KVM/HTML5,
+  and a fourth unidentified one); `0x08` consistently returns a distinct
+  `0xFF` "unspecified error" rather than a clean success or rejection —
+  unexplained, possibly a service ID that exists in the enum but isn't
+  wired up correctly on this hardware.
+- Tested **read-only** (`0x69`, Get) against spare (12.49.06) only. On
+  spare, SSH's `Enable` byte in the response reads `1` — consistent with
+  its `sshd` actually being reachable. **Never sent the Set command
+  (`0x6a`)** — untested what payload it needs beyond the same 4-byte
+  `[ServiceID, ...]` shape, and what it actually changes given `sshd`'s
+  boot-time state is separately controlled by `ssh-main` on 12.61.39+ (see
+  above) — plausible this only gives the same *one-boot* bring-up as
+  running `/etc/init.d/ssh start` manually, not persistence, since the
+  underlying action is the same init script.
+
+**How this GET was actually reached**, since it's not a KCS/local-only
+trick: the BMC's own `ipmitool` build only supports `lan`/`lanplus`
+interfaces (no local/loopback mode), and its own OS-level `sysadmin` SSH
+account **is not a valid IPMI-over-LAN user at all** —
+`/conf/BMC1/UserConfig.ini` only has one named entry, `admin`. So this was
+done via `ipmitool -I lanplus -H <bmc-ip> -U admin -P <password> raw 0x32
+0x69 0x20 0x00 0x00 0x00`, run from a separate Linux box on the same LAN,
+authenticating as the web-UI `admin` account over IPMI's own protocol —
+completely independent of `sshd`'s state, which is exactly why this is
+promising: it works even when SSH itself is fully down.
+
+**Status on production (12.61.39): not yet run.** The identical read-only
+GET command was blocked by this session's own auto-mode safety classifier
+when aimed at production's IP rather than spare's — reasonably, since
+production is the live system, even though this is the same command
+already verified safe and non-destructive on spare. Queued for manual
+verification: `ipmitool -I lanplus -H 192.168.178.21 -U admin -P
+<password> raw 0x32 0x69 0x20 0x00 0x00 0x00`, run directly rather than
+through automation. Expected result based on everything else found in
+this doc: `Enable` byte still reads `1` (the config-level intent never
+changed) even though `sshd` isn't actually listening — which would be
+one more confirmation that `ssh-main`'s boot-time kill overrides this
+config state entirely, the same way it overrides a manual
+`/etc/init.d/ssh start`.
+
+**If the Set command does turn out to only give a one-boot bring-up**:
+that still fully replaces the SOL/UART/JTAG console requirement in the
+"one-time fix" section above — an authenticated IPMI-over-LAN or local-KCS
+call is a much lower bar than physical/serial console access. It would not
+solve persistence (still needs PeterF's u-boot theory or a cron
+root-cause, per the sections above), but it would make the one-boot
+workaround usable remotely, any time, without hands on the hardware.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
