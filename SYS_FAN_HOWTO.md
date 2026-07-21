@@ -508,15 +508,17 @@ no cramfs userspace extractor needed). Findings:
   below.** There's a way to make SSH survive reboots that never touches
   the signed rootfs at all.
 
-## A persistent fix without touching the signed firmware: `@reboot` cron (UNCONFIRMED — live test raised doubts, read before trying this)
+## A persistent fix without touching the signed firmware: `@reboot` cron (DOES NOT WORK — live-tested and failed, kept for the reasoning + the negative result)
 
-**Status: this does not yet have a working confirmation. Live-tested on
-the spare board (12.49.06, see results below) and it did not behave as
-the reasoning below predicted. Don't rely on this for production without
-resolving that first.** Keeping the reasoning in place because the pieces
-it's built on are individually confirmed real (see below) — but something
-about how they fit together isn't right yet, and it's not safe to assume
-this "just works" until that's understood.
+**Status: tested live on the spare board, including across a genuine BMC
+reboot, and it failed both times — see full results below. Do not use
+this. The pieces it's built on are each individually real and correctly
+verified (writable crontab, correct boot ordering, genuine `@reboot`
+gating logic in the cron binary), but something prevents cron from
+actually dispatching *any* job on this firmware, including its own
+stock jobs. Root cause unknown.** Left the reasoning and the test writeup
+in place since the individual facts are still accurate and useful context
+for whoever eventually root-causes this — just not as a working fix.
 
 The `/etc/init.d/ssh start` trick above gets SSH working immediately, but
 only until the next reboot, because the boot-time kill lives in the
@@ -595,7 +597,7 @@ succeed without needing console access again. If it doesn't, check
 `/var/log/cron.log` (or wherever this board routes cron's log output) via
 console for whether the `@reboot` line actually fired.
 
-### Live test on spare (12.49.06) — inconclusive, and it raised a bigger question
+### Live test on spare (12.49.06) — negative result, including across a real reboot
 
 Before touching production with this, tested it on the spare board over
 SSH (which already has a real, long-standing `@reboot` entry for
@@ -635,15 +637,39 @@ What happened:
 **Net effect: cron does not appear to be actually executing scheduled
 jobs on this board at all right now, independent of anything this repo
 did to it.** That's a bigger and stranger finding than "the new line
-doesn't work" — it suggests either something about this board's current
-state has cron running but non-functional, or there's a triggering
-mechanism for its job execution that hasn't been identified yet (worth
-checking: does a *genuine* reboot make the difference, the same way it
-does for `@reboot` specifically? Untested — the spare test stopped short
-of an actual reboot). Until this is root-caused, treat the entire
-`@reboot`-cron persistence idea as **unproven**, not as a working fix.
-The one-boot `/etc/init.d/ssh start` method above remains the only
-empirically working method in this document.
+doesn't work."
+
+**Follow-up: tested across a genuine reboot too, not just a process
+restart.** Added a fresh `@reboot` test line, backed up `/conf/crontab`
+again, and issued an actual `reboot` of the spare BMC (not just
+`/etc/init.d/cron restart`). The board came back after ~85 seconds. Result:
+the test job still did not run — and neither did the vendor's own
+pre-existing `logrotate` @reboot/minute job, which should unconditionally
+fire within the first minute of any fresh boot (its guard condition,
+"logrotate isn't already running," is trivially true right after a
+reboot). `/var/run/crond.reboot` was freshly created at the correct
+boot-time timestamp (cron did correctly detect this as a genuine startup
+this time), and the `cron` process itself was healthy afterward — alive,
+sleeping normally, no crash, correct `cwd` of `/var/spool/cron`. It just
+never appears to actually dispatch any job, `@reboot` or scheduled,
+real reboot or not.
+
+**Conclusion: this isn't a persistence-timing quirk, it's cron itself not
+executing jobs on this board, root cause unidentified.** Whatever gates
+actual job dispatch (as opposed to the daemon starting and the boot-marker
+logic, both of which work correctly) hasn't been found — could be
+something in this specific board's state, a missing dependency the daemon
+silently no-ops without, or a further internal check beyond the
+"@reboot vs. not system startup" one already found. Not enough evidence
+yet to point at a specific cause. **Treat the entire `@reboot`-cron
+persistence idea as not viable until this is root-caused** — it isn't a
+matter of getting the crontab syntax right, cron does not appear to
+dispatch jobs on this firmware at all, including jobs it ships with by
+default. The one-boot `/etc/init.d/ssh start` method above remains the
+only empirically working method in this document. Both live tests were
+performed on the spare board only, with `/conf/crontab` backed up before
+each attempt and byte-for-byte restored (hash-verified) afterward —
+production was never touched by any of this.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
