@@ -374,6 +374,15 @@ the lockout:
 repack with `mkfs.jffs2`, write it back. (Only applicable pre-12.61.39 —
 see version notes above.)
 
+**Important caveat, added after digging into the actual firmware** (see
+"What `Remove SSH service` actually does" further down): this fix only
+ever mattered for logging in as the literal `sysadmin` account. The
+`admin` account people actually use isn't touched by `DenyUsers sysadmin`
+at all, on any version — so if `sshd` is running, `admin` can already SSH
+in regardless of this line. On 12.61.39+ specifically, this edit alone
+won't restore SSH access anyway, and isn't even the relevant blocker —
+see below.
+
 **Correction**: an earlier version of this section said this "generalizes
 directly" from the `SKU.xml` pipeline via `-sku` — that's not accurate.
 `build_sku_bin.sh`'s `-sku` route only ever compiles and writes back the
@@ -425,6 +434,78 @@ in that script to hook an `ssh_server_config` edit into — adding one would
 mean building and verifying a separate write mechanism, which is exactly
 the open, unverified question above. So this stays a manual, documented
 fix rather than a script flag.
+
+## What "Remove SSH service" (12.61.39) actually does — sshd isn't gone, it's stopped on purpose
+
+Everything above about `DenyUsers sysadmin` is real, but it turned out not
+to be the actual barrier to general SSH access on 12.61.39+, and the
+changelog wording ("Remove SSH service") is misleading. Extracted and
+mounted the two `cramfs` partitions from production's own firmware dump
+(same method `build_sku_bin.sh` already uses to pull `bmcprog` — the
+partitions were already sliced out from a prior session; mounting them
+read-only via `sudo mount -t cramfs -o loop,ro` on a Linux box was enough,
+no cramfs userspace extractor needed). Findings:
+
+- **`/usr/sbin/sshd`, `/etc/ssh/ssh_host_*_key`, `ssh-keygen`, the full
+  `sshd_config` chain — all still present and intact** in the 12.61.39
+  rootfs. Nothing was deleted. `/etc/ssh/sshd_config` is still a symlink to
+  `/conf/ssh_server_config` on the writable JFFS2 config partition, exactly
+  as documented above.
+
+- **The actual change is two lines in `/etc/init.d/ssh-main`**, dated one
+  week before the 12.61.39 release (2025/07/02):
+
+  ```sh
+  # Sam.C 2025/06/24: Disable SSH port by default.
+  /etc/init.d/ssh start
+  /etc/init.d/ssh stop
+  ```
+
+  Every boot, `sshd` is started (regenerating host keys the first time)
+  and then immediately stopped again, a few lines later, in the same init
+  script. That's the entire "removal" — a deliberate start-then-kill added
+  to the boot sequence, not a removed daemon. This is also why the TCP
+  port-22 scan against production (above) shows nothing listening: the
+  daemon genuinely isn't running *after boot completes* — but the binary,
+  keys, and config are all one command away from working again.
+
+- **`DenyUsers sysadmin` was never the practical blocker for a human
+  login.** It's re-applied unconditionally by `check_conf_presence()`
+  inside `/etc/init.d/ssh`'s own `start` case (`sed -i '/DenyUsers
+  sysadmin/d' ...; echo "DenyUsers sysadmin" >> ...`) — so it comes back
+  every time `ssh start` runs, regardless of any JFFS2 edit made
+  beforehand. But it only ever denies the literal Unix user `sysadmin`
+  (an internal service account). The account a person actually logs in
+  as — `admin`, the same one used for the web UI — isn't a static
+  `/etc/passwd` entry at all; it's resolved live through
+  `libnss_ipmi.so` (present and untouched in this rootfs) via the `ipmi`
+  source in `nsswitch.conf`. No `AllowUsers`/`DenyUsers` line anywhere in
+  `/etc/defconfig/ssh_server_config` restricts `admin`. So on a board
+  where `sshd` is actually running, logging in as `admin` was never
+  blocked by anything documented in this repo — `DenyUsers sysadmin` and
+  the daemon-liveness question are two independent issues that happen to
+  live in the same file.
+
+- **Practical upshot for a board already on 12.61.39+, once you have any
+  one-time console access (SOL/UART/JTAG)**: running
+
+  ```sh
+  /etc/init.d/ssh start
+  ```
+
+  directly (not via `ssh-main`, and without rebooting afterward) starts
+  `sshd` and leaves it running — `admin` can then SSH in normally. No
+  reflash, no signature bypass, no JFFS2 repack required. The catch: this
+  doesn't survive a reboot, because `ssh-main` runs its `start; stop`
+  sequence again on every boot. Making it persistent means patching
+  `ssh-main` (or the `check_conf_presence` re-injection, if you also want
+  `sysadmin` itself usable) — and that script lives in the **signed,
+  read-only main cramfs rootfs**, not the writable JFFS2 config partition
+  this repo already knows how to edit. Patching it durably runs straight
+  into the same wall PeterF hit with his own full-firmware modifications:
+  the signature check on the main image. His u-boot unsigned-flash theory
+  (below) is the most promising lead for making *this* fix persistent,
+  not just the one-boot version above.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
