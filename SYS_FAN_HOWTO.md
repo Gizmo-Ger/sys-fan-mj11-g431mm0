@@ -810,19 +810,28 @@ authenticating as the web-UI `admin` account over IPMI's own protocol —
 completely independent of `sshd`'s state, which is exactly why this is
 promising: it works even when SSH itself is fully down.
 
-**Status on production (12.61.39): not yet run.** The identical read-only
-GET command was blocked by this session's own auto-mode safety classifier
-when aimed at production's IP rather than spare's — reasonably, since
-production is the live system, even though this is the same command
-already verified safe and non-destructive on spare. Queued for manual
-verification: `ipmitool -I lanplus -H 192.168.178.21 -U admin -P
-<password> raw 0x32 0x69 0x20 0x00 0x00 0x00`, run directly rather than
-through automation. Expected result based on everything else found in
-this doc: `Enable` byte still reads `1` (the config-level intent never
-changed) even though `sshd` isn't actually listening — which would be
-one more confirmation that `ssh-main`'s boot-time kill overrides this
-config state entirely, the same way it overrides a manual
-`/etc/init.d/ssh start`.
+**Status on production (12.61.39): confirmed, run manually by the board
+owner directly (not through automation — this session's auto-mode
+classifier reasonably blocks raw IPMI commands aimed at production).**
+The response is **byte-for-byte identical** to spare's:
+
+```
+20 00 00 00 01 62 6f 6e 64 30 00 00 00 00 00 00
+00 00 00 00 00 00 ff ff ff ff 16 00 00 00 58 02
+00 00 ff 80 3c 00 00 00 08 07 00 00
+```
+
+Same `Enable=1`, same port `22` (`16 00 00 00`), same interface `bond0`,
+same timeouts. This is clean, direct confirmation of the prediction: the
+config-level "Enable" flag for `SSH_SERVICE` reads enabled on production
+even though `sshd` is definitively not listening (confirmed earlier by
+the TCP port-22 scan). `ssh-main`'s boot-time `start; stop` overrides this
+config state unconditionally — the OEM command's stored "should be
+enabled" intent and the daemon's actual runtime state are just
+disconnected from each other on this firmware version. One more piece of
+evidence, on top of the `DenyUsers`/Redfish/cron findings above, that the
+config layer and the boot-time enforcement layer on 12.61.39 don't agree
+with each other anywhere they overlap.
 
 **If the Set command does turn out to only give a one-boot bring-up**:
 that still fully replaces the SOL/UART/JTAG console requirement in the
