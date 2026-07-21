@@ -337,8 +337,42 @@ Everything else (PAM stack, nsswitch, passwd/shadow layout) matches. That
 file lives in the same writable JFFS2 config partition as `SKU.xml` — not
 the signed, read-only main firmware image.
 
+**Vendor changelog confirms all of this directly.** Gigabyte's own
+`BMC_Release_Note_126139.doc` (the release notes shipped with SMT firmware
+12.61.39, released 2025/07/02) spells out the exact version history behind
+the lockout:
+
+- **12.60.41** — `[defect] Always block sysadmin login via ssh.` This is
+  the changelog entry for the `DenyUsers sysadmin` line documented above —
+  straight from the vendor, not just inferred from the config diff.
+- **12.60.39** (one version earlier) — two relevant entries:
+  `[feature] Modify default password for sysadmin.` and
+  `[feature] Add gbt oem cmd to enable/disable ssh.` The second one is
+  worth chasing separately — a Gigabyte OEM IPMI command that toggles SSH
+  on/off. If it's still present and unrestricted on a board running
+  anywhere in the 12.60.39–12.61.38 range (i.e. after this command was
+  added but before SSH was removed outright), it could be a legitimate,
+  vendor-supported way to re-enable SSH without touching JFFS2 at all —
+  worth probing via `ipmitool raw`/OEM command discovery before falling
+  back to the config-partition repack below. Not yet tested here.
+- **12.61.27** — `[feature] Hide SSH-related features on Web UI.` This is
+  the vendor's own confirmation of the cosmetic UI masking documented
+  further down (Services SSH toggle and SSH-key upload fields disappearing
+  from the web UI while the Redfish backend stays live) — it was a
+  deliberate UI-only change, not a coincidence.
+- **12.61.39** — `[feature] Remove SSH service.` SSH goes from
+  blocked-for-sysadmin-only to fully removed at this version. Confirms
+  directly what Peter reported: SSH access still works on firmware prior
+  to 12.61.39, and stops working entirely from 12.61.39 onward — not just
+  for `sysadmin`, for anyone, because the service itself is gone. On a
+  board already on 12.61.39+, the JFFS2 `DenyUsers` edit below won't bring
+  SSH back on its own, since there's no `sshd` left to re-exec — that fix
+  only applies to boards in the 12.60.41–12.61.38 window where SSH is
+  present but blocked, not to boards past 12.61.39 where it's absent.
+
 **Fix** — pull the JFFS2 config partition apart, drop the `DenyUsers` line,
-repack with `mkfs.jffs2`, write it back.
+repack with `mkfs.jffs2`, write it back. (Only applicable pre-12.61.39 —
+see version notes above.)
 
 **Correction**: an earlier version of this section said this "generalizes
 directly" from the `SKU.xml` pipeline via `-sku` — that's not accurate.
