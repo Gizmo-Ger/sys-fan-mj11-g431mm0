@@ -12,12 +12,19 @@
 # identity edit, then extracts the ARM bmcprog compiler out of a firmware
 # dump's cramfs rootfs and runs it under qemu-arm emulation.
 #
-# SECURITY REQUIREMENT, not just a suggestion: run this in a disposable,
-# network-isolated VM with no shared folders or credentials exposed. It
-# mounts an untrusted filesystem image through the kernel cramfs driver and
-# executes a foreign-arch binary (bmcprog) extracted from it under qemu-arm
-# user-mode emulation. The script will prompt before that step (unless
-# --yes); the prompt is a safety gate, not a formality.
+# SECURITY REQUIREMENT, not just a suggestion: run this in a disposable VM
+# with no shared folders or credentials exposed, ever. The specific step
+# that needs to be network-isolated too is the untrusted-cramfs-mount +
+# foreign-arch-binary-execution step (mounting $DUMP through the kernel
+# cramfs driver, then running bmcprog, extracted from it, under qemu-arm
+# emulation) — the script prompts before that exact step (unless --yes);
+# that prompt is a safety gate, not a formality. The one earlier step that
+# does need network access — installing `jefferson` from PyPI — happens
+# before the untrusted dump is ever touched, and is separately hardened via
+# pinned versions + verified hashes (--require-hashes) rather than isolation,
+# since its threat model (a compromised PyPI package) differs from executing
+# an arbitrary foreign firmware binary. If you need the whole run offline,
+# pre-populate the venv's package cache before disconnecting the VM.
 #
 # Platform requirements: Linux (kernel cramfs mount support), Bash 4+, GNU
 # coreutils (the `dd ... iflag=skip_bytes,count_bytes` usage is GNU-specific).
@@ -93,29 +100,14 @@ done
 DUMP="$IN_DIR/bmc_full_dump.bin"
 CONFIG_BACKUP="$IN_DIR/bmc_config_backup.bin"
 XML="$IN_DIR/SKU.xml"
-WORK="$(mktemp -d)"
 OUT_DIR="./sku_build"
-MOUNT_DIR="$WORK/mnt"
-
-SUCCESS=0
-cleanup() {
-  if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
-    sudo umount "$MOUNT_DIR" 2>/dev/null || true
-  fi
-  if [ "$SUCCESS" = "1" ]; then
-    rm -rf "$WORK"
-  else
-    echo "NOTE: leaving working directory for inspection: $WORK" >&2
-  fi
-}
-trap cleanup EXIT
 
 echo "==> Checking inputs"
 [ -f "$DUMP" ] || { echo "ERROR: $DUMP not found. Run 'gigaflash -dump bmc_full_dump.bin' on the target BMC first."; exit 1; }
 echo "    dump: $DUMP ($(stat -c%s "$DUMP" 2>/dev/null || stat -f%z "$DUMP") bytes)"
 
 echo "==> Checking dependencies"
-REQUIRED_TOOLS=(python3 dd qemu-arm sudo mountpoint mount umount modprobe find tail file stat)
+REQUIRED_TOOLS=(python3 dd qemu-arm sudo mountpoint mount umount modprobe find tail file stat uname mktemp cp mv rm mkdir chmod cat)
 MISSING=()
 for tool in "${REQUIRED_TOOLS[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || MISSING+=("$tool")
@@ -130,6 +122,31 @@ NEED_JEFFERSON=0
 JEFFERSON="jefferson"
 if [ ! -f "$XML" ] && [ -f "$CONFIG_BACKUP" ]; then
   NEED_JEFFERSON=1
+fi
+
+# Only create the working directory (and register cleanup) once the cheap,
+# no-side-effect checks above have passed — an early usage mistake (missing
+# dump file, missing tool) shouldn't leave anything behind under /tmp.
+WORK="$(mktemp -d)"
+MOUNT_DIR="$WORK/mnt"
+STAGE_DIR=""
+SUCCESS=0
+cleanup() {
+  if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
+    sudo umount "$MOUNT_DIR" 2>/dev/null || true
+  fi
+  if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  if [ "$SUCCESS" = "1" ]; then
+    rm -rf "$WORK"
+  else
+    echo "NOTE: leaving working directory for inspection: $WORK" >&2
+  fi
+}
+trap cleanup EXIT
+
+if [ "$NEED_JEFFERSON" = "1" ]; then
   # `python3 -m venv --help` succeeds even when the venv module can't
   # actually create a working environment (e.g. ensurepip missing) — the
   # only reliable check is to actually create one.
@@ -157,23 +174,61 @@ else
   [ -n "$NEW_PRODUCT_NAME" ] && [ -n "$NEW_FAN_PROFILE" ] || { echo "ERROR: no SKU.xml provided, so --product-name and --fan-profile are required to auto-edit one from $CONFIG_BACKUP."; exit 1; }
 
   if [ "$NEED_JEFFERSON" = "1" ]; then
-    echo "==> Installing jefferson (JFFS2 extractor) into an isolated venv (pinned version, no system-wide changes)"
+    echo "==> Installing jefferson (JFFS2 extractor) into an isolated venv (pinned version + hash-verified, no system-wide changes)"
     python3 -m venv "$WORK/venv"
-    "$WORK/venv/bin/pip" install --quiet "jefferson==0.4.7"
+    # Every package in jefferson 0.4.7's dependency chain, pinned to an exact
+    # version and hash (obtained via `pip install --dry-run --report` against
+    # the real package, not transcribed from a webpage). --require-hashes
+    # makes pip refuse to install anything not listed here, so this also
+    # catches a compromised/substituted package on PyPI's end, not just a
+    # version drift. lzallright ships a compiled x86_64 wheel — these hashes
+    # are for that architecture, matching the tested-platform note above; a
+    # non-x86_64 host needs different hashes for that one package.
+    cat > "$WORK/jefferson-requirements.txt" <<'REQEOF'
+jefferson==0.4.7 --hash=sha256:161bbd4ee24ab0322bb04b22cb212ae9902e8d87fe659bf201f9c2e633545900
+click==8.4.2 --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
+dissect.cstruct==4.7 --hash=sha256:0427621ce67baa3106df2dc63a320d0a7f5c2da88ba3faf2ef5886a1a6b458fd
+lzallright==0.2.6 --hash=sha256:bad91a3b9dde691a1aef2201f5d5dfa478ded10095383f76504532859a84fb48
+REQEOF
+    "$WORK/venv/bin/pip" install --quiet --require-hashes -r "$WORK/jefferson-requirements.txt"
     JEFFERSON="$WORK/venv/bin/jefferson"
   fi
 
   echo "==> Extracting SKU.xml from $CONFIG_BACKUP"
 
   # JFFS2 doesn't start at byte 0 of the config partition — locate its magic
-  # (0x1985 LE = bytes 85 19) rather than assuming a fixed offset.
+  # (0x1985 LE = bytes 85 19) rather than assuming a fixed offset. A bare
+  # 2-byte match can occur by coincidence in unrelated data ahead of the
+  # real filesystem, so require the 12-byte node header found there to
+  # declare a plausible length that lands exactly on a second valid magic
+  # (or cleanly on the end of the data) — verified against this project's
+  # own real config backup, where node 1 (offset 65536, totlen=12) chains
+  # directly to node 2's magic at 65548.
   JFFS2_OFFSET="$(python3 - "$CONFIG_BACKUP" <<'PYEOF'
-import sys
+import struct, sys
+
 data = open(sys.argv[1], 'rb').read()
-i = data.find(b'\x85\x19')
-if i == -1:
-    raise SystemExit('no JFFS2 magic found')
-print(i)
+
+def node_ok(off):
+    if off + 12 > len(data):
+        return False
+    magic, nodetype, totlen = struct.unpack_from('<HHI', data, off)
+    if totlen < 12 or off + totlen > len(data):
+        return False
+    next_off = (off + totlen + 3) & ~3
+    if next_off >= len(data):
+        return True  # ran cleanly off the end - plausible last node
+    return data[next_off:next_off + 2] == b'\x85\x19'
+
+i = 0
+while True:
+    i = data.find(b'\x85\x19', i)
+    if i == -1:
+        raise SystemExit('no JFFS2 magic found (or none chain-validated)')
+    if node_ok(i):
+        print(i)
+        break
+    i += 1
 PYEOF
 )"
   echo "    JFFS2 filesystem starts at offset $JFFS2_OFFSET"
@@ -237,6 +292,26 @@ def normalize(text):
 # Verify the edit touched nothing outside these two fields.
 if normalize(old) != normalize(new):
     sys.exit("ERROR: edit touched content outside ProductName/FanProfile — aborting")
+
+# Structural sanity check: confirm the result still parses as well-formed
+# XML. This is parse-only (not a reserialize-and-rewrite) specifically to
+# avoid the bmcprog-compatibility risk of reformatting the file — see the
+# note above about why this uses regex substitution instead of a DOM parser
+# for the edit itself. Uses expat directly with DOCTYPE rejected outright
+# (blocks both XXE and billion-laughs, both of which require a DTD) rather
+# than xml.etree.ElementTree, whose default entity handling isn't hardened
+# against a maliciously crafted config backup.
+import xml.parsers.expat
+
+def _reject_doctype(*_args):
+    raise ValueError("DOCTYPE declarations are not allowed in SKU.xml")
+
+parser = xml.parsers.expat.ParserCreate()
+parser.StartDoctypeDeclHandler = _reject_doctype
+try:
+    parser.Parse(new, True)
+except (xml.parsers.expat.ExpatError, ValueError) as e:
+    sys.exit(f"ERROR: edited SKU.xml is not well-formed XML: {e}")
 
 open(out_path, 'w', encoding='utf-8').write(new)
 print(f"    wrote {out_path}")
@@ -358,46 +433,81 @@ if [ ! -f "$BUILD_DIR/SKU.BIN" ]; then
 fi
 
 echo "==> Validating output"
+# Uses explicit if/sys.exit rather than `assert` throughout: assert
+# statements are silently stripped when Python runs with -O or
+# PYTHONOPTIMIZE=1, which would turn every check below into a no-op and
+# publish an unverified SKU.BIN as "OK".
 python3 - "$BUILD_DIR/SKU.BIN" "$WORK/SKU.xml" <<'PYEOF'
 import gzip, re, sys
+
 bin_path, xml_path = sys.argv[1], sys.argv[2]
 data = open(bin_path, 'rb').read()
-assert data[:8] == b'GIGABYTE', f"bad header magic: {data[:8]!r}"
+
+if data[:8] != b'GIGABYTE':
+    sys.exit(f"ERROR: bad header magic: {data[:8]!r}")
+
 gi = data.find(b'\x1f\x8b')
-assert gi != -1, "no gzip section found"
+if gi == -1:
+    sys.exit("ERROR: no gzip section found in SKU.BIN")
+
 embedded_xml = gzip.decompress(data[gi:]).decode()
-assert '<GSSKU>' in embedded_xml, "embedded XML doesn't look like a SKU document"
+if '<GSSKU>' not in embedded_xml:
+    sys.exit("ERROR: embedded XML doesn't look like a SKU document")
 
 compiled_xml = open(xml_path, encoding='utf-8').read()
+
+# Every identity-relevant field bmcprog is fed must come back out unchanged
+# in the compiled binary. Verified against a real build's actual embedded
+# output (bmcprog reformats whitespace but preserves every field and the
+# FRU+PROJECT structure) rather than assumed. Fields that legitimately
+# repeat (FRU + PROJECT sections both carry these) are compared as the
+# full ordered list of values, not just the first match.
+FIELDS = [
+    'ChassisSerialNumber', 'BoardManufacturerName', 'BoardProductName',
+    'BoardSerialNumber', 'BoardPartNumber', 'ProductManufacturerName',
+    'ProductName', 'ProductPartNumber', 'ProductVersion',
+    'ProductSerialNumber', 'AssetTag', 'MacAddr0', 'FanProfile',
+]
+
+problems = []
+for tag in FIELDS:
+    expected = re.findall(f'<{tag}>([^<]*)</{tag}>', compiled_xml)
+    actual = re.findall(f'<{tag}>([^<]*)</{tag}>', embedded_xml)
+    if not expected:
+        # A field missing from the *input* we compiled is a bug in this
+        # script's own field list, not a bmcprog problem - fail loudly
+        # rather than let it silently compare as "matching" against an
+        # equally-absent field in the output.
+        problems.append(f"{tag}: expected to find this field in the compiled SKU.xml but didn't")
+        continue
+    if expected != actual:
+        problems.append(f"{tag}: SKU.BIN has {actual!r}, expected {expected!r}")
+
+if problems:
+    sys.exit("ERROR: SKU.BIN validation failed:\n  " + "\n  ".join(problems))
 
 def field(text, tag):
     m = re.search(f'<{tag}>([^<]*)</{tag}>', text)
     return m.group(1) if m else None
 
-for tag in ['ProductName', 'FanProfile']:
-    expected = field(compiled_xml, tag)
-    actual = field(embedded_xml, tag)
-    assert expected == actual, f"{tag} mismatch: SKU.BIN has {actual!r}, expected {expected!r}"
-
-print(f"    OK: {len(data)} bytes, header valid, embedded XML matches compiled SKU.xml "
+print(f"    OK: {len(data)} bytes, header valid, all {len(FIELDS)} identity fields verified "
       f"(ProductName={field(embedded_xml, 'ProductName')!r}, FanProfile={field(embedded_xml, 'FanProfile')!r})")
 PYEOF
 
 echo "==> Publishing output"
-if [ -L "$OUT_DIR" ]; then
-  echo "ERROR: $OUT_DIR exists and is a symlink — refusing to publish through it." >&2
-  exit 1
-fi
-if [ -e "$OUT_DIR" ] && [ ! -w "$OUT_DIR" ]; then
-  echo "ERROR: $OUT_DIR exists but isn't writable by $(whoami) (e.g. left over from a prior run under sudo)." >&2
-  echo "  Remove or chown it manually, then re-run: rm -rf $OUT_DIR" >&2
+if [ -e "$OUT_DIR" ]; then
+  echo "ERROR: $OUT_DIR already exists. Refusing to remove or overwrite it" >&2
+  echo "automatically — it may contain files this script doesn't know about" >&2
+  echo "(or, in principle, something mounted there). Remove or move it aside" >&2
+  echo "yourself, then re-run:" >&2
+  echo "  rm -rf $OUT_DIR" >&2
   exit 1
 fi
 STAGE_DIR="$(mktemp -d "./sku_build.XXXXXX")"
 cp "$BUILD_DIR/SKU.BIN" "$STAGE_DIR/SKU.BIN"
 cp "$WORK/SKU.xml" "$STAGE_DIR/SKU.xml"
-rm -rf "$OUT_DIR"
 mv "$STAGE_DIR" "$OUT_DIR"
+STAGE_DIR=""
 
 SUCCESS=1
 
