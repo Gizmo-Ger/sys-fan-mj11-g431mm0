@@ -496,7 +496,7 @@ removals — the backend for each is fully intact and functional on production:
 
 - **Services SSH toggle**: the backend is the standard Redfish
   `ManagerNetworkProtocol` resource. Querying it directly on production,
-  bypassing the web UI entirely, confirms it's alive and SSH is already on:
+  bypassing the web UI entirely:
 
   ```powershell
   curl.exe -k -u admin:<password> https://<production-ip>/redfish/v1/Managers/Self/NetworkProtocol
@@ -517,12 +517,36 @@ removals — the backend for each is fully intact and functional on production:
   config partition). None of this lives in any `.ini` file — it's Redis
   state, a separate subsystem from everything else checked in this doc.
 
-**Net effect**: on production firmware, Gigabyte pulled the web-UI control
-surface for both of these but left the underlying mechanisms (`authorized_keys`
-path, `ManagerNetworkProtocol`/SSH Redfish object, the daemon itself) fully
-functional — consistent with the actual lockout being nothing more than the
-single `DenyUsers sysadmin` line covered above. Nothing else in the stack —
-not PAM, not the IPMI user DB, not Redfish/Redis — is holding anything back.
+**Correction, now that production is confirmed on 12.61.39**: an earlier
+version of this section read the `ProtocolEnabled: true` response above as
+proof the SSH daemon itself was alive and reachable, just gated by
+`DenyUsers`. That's wrong for this specific board. A direct TCP check
+against production (`Test-NetConnection <production-ip> -Port 22`) fails —
+**nothing is listening on port 22 at all**. That lines up exactly with the
+`[feature] Remove SSH service.` changelog entry for 12.61.39 documented
+above: `sshd` isn't blocked here, it's gone. The Redfish `SSH` object is
+leftover Redis state that was never cleared when the service was pulled —
+cosmetic in a different, more misleading way than the missing UI buttons:
+the UI omission is honest about SSH being unavailable, while the Redfish
+field actively claims it's enabled when it demonstrably isn't listening.
+Don't trust `ProtocolEnabled` on this resource as a signal of whether
+`sshd` is actually running — check the port directly.
+
+The `authorized_keys` path and IPMI user DB findings above are unaffected
+by this correction — those are genuinely inert-but-present regardless of
+SSH daemon state. **On boards still in the 12.60.41–12.61.38 window**
+(daemon present, only `sysadmin` blocked), the original reading holds: the
+daemon really is live on port 22 for every other account, and
+`ManagerNetworkProtocol` accurately reflects that. The distinction only
+matters once a board reaches 12.61.39, where the field goes stale.
+
+**Net effect**: on production firmware (12.61.39), Gigabyte pulled the
+web-UI control surface *and* the SSH daemon itself, but left
+`authorized_keys` plumbing and the Redfish/Redis `SSH` descriptor behind as
+inert leftovers — none of which can be used to bring SSH back without
+either a full-partition JFFS2 restore to pre-12.61.39 firmware or,
+per the u-boot theory noted above (PeterF's community lead), a way to
+write an older or modified image directly.
 
 As a final check, a `PATCH` to `SSH/ProtocolEnabled` (via `If-Match` with a
 fresh ETag) was sent to the same production endpoint to confirm the write
