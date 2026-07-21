@@ -557,11 +557,22 @@ config partition.
 1. **If you already have a live shell** (SOL/UART, or SSH brought up
    temporarily via the `/etc/init.d/ssh start` trick above): just
    `echo '@reboot sysadmin sleep 15 && /etc/init.d/ssh start' >>
-   /conf/crontab`, no restart of cron needed — it re-reads `/etc/crontab`
-   on its own (standard vixie-cron behavior), or `kill -HUP $(cat
-   /var/run/crond.pid)` to force it immediately. This is a live edit to
-   flash-backed data, so it's already persistent — done in one shot,
-   never needs repeating.
+   /conf/crontab`. This is a live edit to flash-backed data, so it's
+   already persistent from that point on — done in one shot, never needs
+   repeating.
+
+   **Correction**: an earlier version of this section said a `kill -HUP`
+   on cron would "force it immediately." That's wrong for `@reboot`
+   specifically. This board's `/usr/sbin/cron` is a genuine ISC/vixie-cron
+   binary — confirmed by the `/var/run/crond.reboot` marker string inside
+   it — and that binary's whole point is to gate `@reboot` jobs to run
+   **once per boot**: it only runs them if that marker file is absent,
+   then creates it. A HUP/reload picks up new *timed* (minute/hour)
+   entries fine, but won't retroactively run a newly-added `@reboot` line
+   mid-uptime. To test it without a full reboot: `rm -f
+   /var/run/crond.reboot && /etc/init.d/cron restart`. To actually confirm
+   it survives a real reboot, there's no shortcut — you have to reboot the
+   BMC and check.
 2. **If you only have offline JFFS2 access** (no shell at all, board on
    12.61.39+ with no other console): extend the same `jefferson` extract
    → edit → `mkfs.jffs2` repack → write-back pipeline this repo already
