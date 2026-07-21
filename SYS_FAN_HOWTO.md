@@ -789,15 +789,14 @@ disassembler needed, just `nm -D`, `readelf`, and raw byte inspection)**:
   `0xFF` "unspecified error" rather than a clean success or rejection —
   unexplained, possibly a service ID that exists in the enum but isn't
   wired up correctly on this hardware.
-- Tested **read-only** (`0x69`, Get) against spare (12.49.06) only. On
+- Tested **read-only** (`0x69`, Get) against spare (12.49.06) first. On
   spare, SSH's `Enable` byte in the response reads `1` — consistent with
-  its `sshd` actually being reachable. **Never sent the Set command
-  (`0x6a`)** — untested what payload it needs beyond the same 4-byte
-  `[ServiceID, ...]` shape, and what it actually changes given `sshd`'s
-  boot-time state is separately controlled by `ssh-main` on 12.61.39+ (see
-  above) — plausible this only gives the same *one-boot* bring-up as
-  running `/etc/init.d/ssh start` manually, not persistence, since the
-  underlying action is the same init script.
+  its `sshd` actually being reachable. What it actually changes given
+  `sshd`'s boot-time state is separately controlled by `ssh-main` on
+  12.61.39+ (see above) — plausible this only gives the same *one-boot*
+  bring-up as running `/etc/init.d/ssh start` manually, not persistence,
+  since the underlying action is the same init script. Set (`0x6a`) was
+  explored afterward — see below.
 
 **How this GET was actually reached**, since it's not a KCS/local-only
 trick: the BMC's own `ipmitool` build only supports `lan`/`lanplus`
@@ -833,13 +832,63 @@ evidence, on top of the `DenyUsers`/Redfish/cron findings above, that the
 config layer and the boot-time enforcement layer on 12.61.39 don't agree
 with each other anywhere they overlap.
 
-**If the Set command does turn out to only give a one-boot bring-up**:
-that still fully replaces the SOL/UART/JTAG console requirement in the
-"one-time fix" section above — an authenticated IPMI-over-LAN or local-KCS
-call is a much lower bar than physical/serial console access. It would not
-solve persistence (still needs PeterF's u-boot theory or a cron
-root-cause, per the sections above), but it would make the one-boot
-workaround usable remotely, any time, without hands on the hardware.
+### The Set command (`0x6a`) — length found, exact payload format unsolved
+
+Explored on spare only, never attempted on production. Every step below
+returned a non-zero completion code, meaning the request was rejected
+before any `system()` call could fire — same safety property as every
+other rejected attempt in this document; nothing on spare changed state
+at any point.
+
+- Naively replaying spare's own 44-byte GET response verbatim as the Set
+  payload (`ServiceID=0x20`, `Enable=1`, same everything) returned `0xC7`
+  (request data length invalid) — so Set's expected length isn't 44, and
+  isn't the same as GET's response shape.
+- Bisected by truncating that same payload to shorter lengths (8, 12, 16,
+  20, 24, 28, 32, 36 bytes). Lengths 8–32 all returned `0xC7`. **Length 36
+  returned a different code, `0x82`** — meaning 36 is the correct (or at
+  least an accepted) request length; something changed between 32 and 36.
+- Traced `0x82` via disassembly (Capstone, ARM mode, no source needed) to
+  `libipmiamioemserviceconf.so`+`0x28ac`:
+  ```
+  mvn  r3, #0x7d      ; r3 = 0x82 — the actual completion code returned
+  mov  r0, #0x82      ; unrelated: severity arg for the debug-log call below
+  strb r3, [r6]       ; store completion code into the response
+  ```
+  reached via `bne #0x28ac` after a call at `0x2410` (`bl #0x13d0`) that
+  takes the ServiceID byte and a byte from near the end of the request
+  buffer — almost certainly a port-validation check (`isPortAllowed` /
+  `isValidStandardPort`, both imported by this library). So: **length is
+  right, content isn't** — most likely because GET's response field
+  order/offsets and Set's expected request field order don't match
+  (e.g. GET may include an echoed field Set doesn't expect, shifting
+  every later field by a few bytes and landing garbage where the port
+  value needs to be).
+
+**Stopping here, documented as an unsolved lead rather than continued
+guessing.** What's confirmed: netFn `0x32`, cmd `0x6a`, exactly 36 bytes,
+first 4 bytes are `[ServiceID, 0, 0, 0]` same as Get. What's still open:
+the exact byte layout of the remaining 32 bytes — almost certainly
+`Enable` + interface name + port + timeout fields similar to what Get
+returns, just not in the same arrangement. Solving it fully would need
+tracing the byte-shuffle sequence between the function's entry and the
+`0x2410` validation call in full (a few dozen more instructions than
+covered here) — real additional reverse-engineering work, not a quick
+guess. Whoever picks this up: start from `AMISetServiceConf` at file
+offset matching symbol address `0x210c` in `libipmiamioemserviceconf.so`,
+same technique as above (Capstone, ARM mode — Thumb mode disassembles to
+garbage on this binary, ARM mode is correct).
+
+**If Set is eventually solved and does turn out to only give a one-boot
+bring-up** (plausible, since the underlying action found earlier is
+literally `/etc/init.d/ssh force-stop; /etc/init.d/ssh start &`, the same
+one-shot script as the console method): that would still fully replace
+the SOL/UART/JTAG console requirement in the "one-time fix" section
+above — an authenticated IPMI-over-LAN or local-KCS call is a much lower
+bar than physical/serial console access. It would not solve persistence
+(still needs PeterF's u-boot theory or a cron root-cause, per the
+sections above), but it would make the one-boot workaround usable
+remotely, any time, without hands on the hardware.
 
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
