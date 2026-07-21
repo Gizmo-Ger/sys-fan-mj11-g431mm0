@@ -671,6 +671,73 @@ performed on the spare board only, with `/conf/crontab` backed up before
 each attempt and byte-for-byte restored (hash-verified) afterward —
 production was never touched by any of this.
 
+### Survey of every other boot/event mechanism that could fire `/etc/init.d/ssh start` from a writable location
+
+Since cron is a dead end (for now), went looking for any other trigger —
+anything that (a) can be configured from the writable JFFS2 config
+partition alone, and (b) actually gets invoked in practice, unlike cron.
+All of this is static analysis on production's mounted 12.61.39 rootfs
+(read-only, no board touched). Checked and ruled out:
+
+- **`/etc/inittab`** — read directly by `/sbin/init` (PID 1), which is
+  where `sshd`-independent respawn entries would normally go. It's a
+  real file inside the signed cramfs rootfs (not a symlink to `/conf`,
+  unlike almost everything else this repo edits), so adding a
+  `respawn:` line here needs the same signed-firmware patch as
+  `ssh-main` itself. No win.
+
+- **All `rc0.d`–`rc9.d` and `rcS.d` directories** — real directories
+  inside the signed rootfs, not symlinks to anything writable. Can't
+  drop a new `S*` script in without patching the signed image.
+
+- **`inetd`** (`/usr/sbin/inetd` exists) — not started anywhere in any
+  `rc*.d`, and `/etc/inetd.conf` doesn't even exist. Would need a
+  one-time launch to be useful at all, which brings no benefit over
+  just running `/etc/init.d/ssh start` directly during that same console
+  session.
+
+- **Network event hooks** (`/etc/network/{if-up,if-down,if-pre-up,
+  if-post-down,udhcpc.d}/*`) — real directories in the signed rootfs
+  (can't add new scripts), and every existing script in them only reads
+  plain config *values* from `/conf` (DDNS on/off, a redfish CA URL,
+  routing feature flags) — none of them execute an arbitrary path or
+  scan a writable directory for extra scripts to run. `udhcpc.script`
+  does glob `/etc/network/udhcpc.d/*` dynamically, but that directory
+  itself is read-only, so nothing can be added to the glob.
+
+- **rsyslog's `omprog` action module** (would let a syslog rule execute
+  an arbitrary external command) — `/etc/rsyslog.conf` genuinely is a
+  symlink to `/conf/rsyslog.conf` and is fully writable, but
+  `/usr/lib/rsyslog/` on this firmware only ships `imklog.so`,
+  `immark.so`, `imuxsock.so`, and the network/compression modules —
+  no `omprog.so`. Without that module, rsyslog can't be configured to
+  execute a program on a log event here, no matter what the writable
+  config says.
+
+- **AMI's own `sync-agent` inotify-watch framework**
+  (`subagents/notify.lua`, `notify_fn_map.lua`, `notify_mask_map.lua`)
+  — this one's real and does execute shell commands via `os.execute()`
+  on file-change events (confirmed in the decompiled-bytecode strings,
+  e.g. an `IN_MODIFY` watch on some file mapped to
+  `touch /tmp/reload-notify`), and even supports an "extensions" system
+  (`extend_notify_map`, `get_modules` from an `extensions` directory).
+  But the watch/action mapping and the extension modules are all
+  precompiled LuaJIT bytecode living in the signed rootfs
+  (`/usr/local/sync-agent/*`), not read from anywhere on `/conf`. Same
+  wall as everything else on this list — flexible mechanism, no writable
+  entry point into it found.
+
+**Conclusion so far**: every boot-time or event-driven trigger mechanism
+on this firmware either lives entirely inside the signed rootfs, or (in
+cron's case) is theoretically reachable from the writable JFFS2 partition
+but doesn't actually fire for reasons still unexplained. Nothing found
+gives a writable-only path to persistent SSH that doesn't ultimately run
+into either "patch the signed rootfs" (ties back to PeterF's u-boot
+theory) or "figure out why cron is inert" (still open). If anyone finds
+another angle — a different daemon, a different config file with a
+program-execution hook — it's worth adding to this list either way,
+confirmed or ruled out.
+
 ## Community lead: manual `SKU.BIN` construction, and a u-boot unsigned-flash theory (PeterF)
 
 PeterF (see attribution at top) shared further detail via forum PM on his
