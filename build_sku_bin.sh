@@ -122,6 +122,23 @@ NEED_JEFFERSON=0
 JEFFERSON="jefferson"
 if [ ! -f "$XML" ] && [ -f "$CONFIG_BACKUP" ]; then
   NEED_JEFFERSON=1
+  # jefferson 0.4.7's dependency chain (click 8.4.2, dissect.cstruct 4.7)
+  # requires Python >=3.10; the pinned lzallright wheel is glibc/x86_64-only.
+  # Checked explicitly here (only when jefferson is actually needed) rather
+  # than just requiring "some python3", since an older-Python or
+  # non-x86_64 host would otherwise fail confusingly deep into the
+  # hash-pinned install below.
+  PYVER="$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo 0.0)"
+  PYVER_MAJOR="${PYVER%%.*}"
+  PYVER_MINOR="${PYVER#*.}"
+  if [ "$PYVER_MAJOR" -lt 3 ] || { [ "$PYVER_MAJOR" -eq 3 ] && [ "$PYVER_MINOR" -lt 10 ]; }; then
+    echo "ERROR: extracting SKU.xml from a config backup needs Python 3.10+ (found: ${PYVER:-none}) for the pinned jefferson/click/dissect.cstruct versions." >&2
+    exit 1
+  fi
+  if [ "$(uname -m)" != "x86_64" ]; then
+    echo "ERROR: jefferson's pinned lzallright dependency ships a compiled x86_64 wheel; $(uname -m) isn't supported by the pinned hash." >&2
+    exit 1
+  fi
 fi
 
 # Only create the working directory (and register cleanup) once the cheap,
@@ -130,6 +147,7 @@ fi
 WORK="$(mktemp -d)"
 MOUNT_DIR="$WORK/mnt"
 STAGE_DIR=""
+LOCK_DIR_HELD=""
 SUCCESS=0
 cleanup() {
   if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
@@ -137,6 +155,9 @@ cleanup() {
   fi
   if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
     rm -rf "$STAGE_DIR"
+  fi
+  if [ -n "$LOCK_DIR_HELD" ] && [ -d "$LOCK_DIR_HELD" ]; then
+    rmdir "$LOCK_DIR_HELD" 2>/dev/null || true
   fi
   if [ "$SUCCESS" = "1" ]; then
     rm -rf "$WORK"
@@ -194,6 +215,20 @@ REQEOF
     JEFFERSON="$WORK/venv/bin/jefferson"
   fi
 
+  if [ "$AUTO_YES" != "1" ]; then
+    echo ""
+    echo "WARNING: dependency installation is done — the next step parses"
+    echo "$CONFIG_BACKUP (untrusted binary data) with a third-party JFFS2"
+    echo "extractor. If you're isolating this VM's network for the untrusted-"
+    echo "data steps in this script, now is the point to disconnect it — no"
+    echo "further network access is needed for the rest of this run."
+    read -r -p "Continue? [y/N] " REPLY
+    case "$REPLY" in
+      [yY]|[yY][eE][sS]) ;;
+      *) echo "Aborted."; exit 1 ;;
+    esac
+  fi
+
   echo "==> Extracting SKU.xml from $CONFIG_BACKUP"
 
   # JFFS2 doesn't start at byte 0 of the config partition — locate its magic
@@ -242,8 +277,23 @@ PYEOF
     echo "Working directory (preserved for inspection): $WORK" >&2
     exit 1
   fi
-  ORIG_XML="$(find "$WORK/extracted" -iname 'SKU.xml' -print -quit)"
-  [ -n "$ORIG_XML" ] || { echo "ERROR: SKU.xml not found inside extracted config partition. jefferson output may have failed — inspect $WORK/extracted manually."; exit 1; }
+  # -type f: jefferson preserves symlinks from the JFFS2 archive verbatim,
+  # and a crafted config backup could plant a "SKU.xml" symlink pointing
+  # anywhere on the filesystem — restrict to regular files so we never
+  # read (or later overwrite) through one. Also require exactly one match
+  # rather than silently taking whichever candidate the filesystem happens
+  # to traverse first.
+  mapfile -t XML_CANDIDATES < <(find "$WORK/extracted" -type f -iname 'SKU.xml')
+  if [ "${#XML_CANDIDATES[@]}" -eq 0 ]; then
+    echo "ERROR: SKU.xml not found inside extracted config partition. jefferson output may have failed — inspect $WORK/extracted manually."
+    exit 1
+  fi
+  if [ "${#XML_CANDIDATES[@]}" -gt 1 ]; then
+    echo "ERROR: found ${#XML_CANDIDATES[@]} SKU.xml files inside the extracted config partition, expected exactly one:" >&2
+    printf '  %s\n' "${XML_CANDIDATES[@]}" >&2
+    exit 1
+  fi
+  ORIG_XML="${XML_CANDIDATES[0]}"
   echo "    found: $ORIG_XML"
 
   echo "==> Applying identity edit"
@@ -270,7 +320,14 @@ def replace_all_uniform(text, tag, new_value):
     if len(existing_values) != 1:
         sys.exit(f"ERROR: <{tag}> occurrences disagree with each other before editing: {sorted(existing_values)!r} — refusing to guess which is right")
     escaped = escape(new_value)
-    return pattern.sub(f'<{tag}>{escaped}</{tag}>', text)
+    # Callable replacement, not an f-string: pattern.sub() treats a string
+    # replacement's backslashes as backreferences (\2 would resolve to the
+    # OLD value, silently reverting the edit for any new_value containing
+    # e.g. a literal "\2"). A callable's return value is used verbatim.
+    replaced = pattern.sub(lambda _m: f'<{tag}>{escaped}</{tag}>', text)
+    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [new_value] * len(matches):
+        sys.exit(f"ERROR: <{tag}> replacement didn't take effect as expected — aborting")
+    return replaced
 
 def replace_single(text, tag, new_value):
     pattern = re.compile(f'(<{tag}>)([^<]*)(</{tag}>)')
@@ -279,7 +336,10 @@ def replace_single(text, tag, new_value):
         sys.exit(f"ERROR: expected exactly one <{tag}> element, found {len(matches)}")
     escaped = escape(new_value)
     m = matches[0]
-    return text[:m.start()] + f'<{tag}>{escaped}</{tag}>' + text[m.end():]
+    replaced = text[:m.start()] + f'<{tag}>{escaped}</{tag}>' + text[m.end():]
+    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [new_value]:
+        sys.exit(f"ERROR: <{tag}> replacement didn't take effect as expected — aborting")
+    return replaced
 
 new = replace_all_uniform(old, 'ProductName', new_product_name)
 new = replace_single(new, 'FanProfile', new_fan_profile)
@@ -292,26 +352,6 @@ def normalize(text):
 # Verify the edit touched nothing outside these two fields.
 if normalize(old) != normalize(new):
     sys.exit("ERROR: edit touched content outside ProductName/FanProfile — aborting")
-
-# Structural sanity check: confirm the result still parses as well-formed
-# XML. This is parse-only (not a reserialize-and-rewrite) specifically to
-# avoid the bmcprog-compatibility risk of reformatting the file — see the
-# note above about why this uses regex substitution instead of a DOM parser
-# for the edit itself. Uses expat directly with DOCTYPE rejected outright
-# (blocks both XXE and billion-laughs, both of which require a DTD) rather
-# than xml.etree.ElementTree, whose default entity handling isn't hardened
-# against a maliciously crafted config backup.
-import xml.parsers.expat
-
-def _reject_doctype(*_args):
-    raise ValueError("DOCTYPE declarations are not allowed in SKU.xml")
-
-parser = xml.parsers.expat.ParserCreate()
-parser.StartDoctypeDeclHandler = _reject_doctype
-try:
-    parser.Parse(new, True)
-except (xml.parsers.expat.ExpatError, ValueError) as e:
-    sys.exit(f"ERROR: edited SKU.xml is not well-formed XML: {e}")
 
 open(out_path, 'w', encoding='utf-8').write(new)
 print(f"    wrote {out_path}")
@@ -352,6 +392,30 @@ PYEOF
     esac
   fi
 fi
+
+# Structural sanity check on $WORK/SKU.xml regardless of which path produced
+# it (auto-edited above, or brought in as-is by the user) — a hand-provided
+# SKU.xml was skipping this entirely before. Parse-only (not a
+# reserialize-and-rewrite), to avoid the bmcprog-compatibility risk of
+# reformatting the file. Uses expat directly with DOCTYPE rejected outright
+# (blocks both XXE and billion-laughs, both of which require a DTD) rather
+# than xml.etree.ElementTree, whose default entity handling isn't hardened
+# against a maliciously crafted input file.
+python3 - "$WORK/SKU.xml" <<'PYEOF'
+import sys
+import xml.parsers.expat
+
+def _reject_doctype(*_args):
+    raise ValueError("DOCTYPE declarations are not allowed in SKU.xml")
+
+content = open(sys.argv[1], encoding='utf-8').read()
+parser = xml.parsers.expat.ParserCreate()
+parser.StartDoctypeDeclHandler = _reject_doctype
+try:
+    parser.Parse(content, True)
+except (xml.parsers.expat.ExpatError, ValueError) as e:
+    sys.exit(f"ERROR: {sys.argv[1]} is not well-formed XML: {e}")
+PYEOF
 
 if [ "$AUTO_YES" != "1" ]; then
   echo ""
@@ -486,28 +550,54 @@ for tag in FIELDS:
 if problems:
     sys.exit("ERROR: SKU.BIN validation failed:\n  " + "\n  ".join(problems))
 
+# The named-field list above only proves those specific fields survived -
+# it wouldn't notice a change to fan tables, sensors, or anything else in
+# the document. bmcprog only reformats whitespace (confirmed against a
+# real build's actual output), so stripping all whitespace from both
+# documents and comparing them in full catches everything else too.
+def strip_ws(text):
+    return re.sub(r'\s+', '', text)
+
+if strip_ws(compiled_xml) != strip_ws(embedded_xml):
+    sys.exit("ERROR: embedded XML differs from compiled SKU.xml outside whitespace — "
+             "something beyond the named identity fields changed during compilation")
+
 def field(text, tag):
     m = re.search(f'<{tag}>([^<]*)</{tag}>', text)
     return m.group(1) if m else None
 
-print(f"    OK: {len(data)} bytes, header valid, all {len(FIELDS)} identity fields verified "
+print(f"    OK: {len(data)} bytes, header valid, full XML content matches compiled SKU.xml "
       f"(ProductName={field(embedded_xml, 'ProductName')!r}, FanProfile={field(embedded_xml, 'FanProfile')!r})")
 PYEOF
 
 echo "==> Publishing output"
-if [ -e "$OUT_DIR" ]; then
-  echo "ERROR: $OUT_DIR already exists. Refusing to remove or overwrite it" >&2
-  echo "automatically — it may contain files this script doesn't know about" >&2
-  echo "(or, in principle, something mounted there). Remove or move it aside" >&2
-  echo "yourself, then re-run:" >&2
-  echo "  rm -rf $OUT_DIR" >&2
+# Guard against two concurrent runs both seeing OUT_DIR absent and racing
+# to publish: `mkdir` is atomic, so only one process can win this lock.
+# Without it, a second run's `mv` onto an existing directory (GNU mv,
+# without -T) moves *into* it rather than replacing it, and would still
+# report success while not actually being at the path it just printed.
+LOCK_DIR="$OUT_DIR.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "ERROR: $LOCK_DIR exists — another run appears to be publishing to $OUT_DIR right now (or a previous run was killed mid-publish; remove $LOCK_DIR manually if so)." >&2
+  exit 1
+fi
+LOCK_DIR_HELD="$LOCK_DIR"
+
+if [ -e "$OUT_DIR" ] || [ -L "$OUT_DIR" ]; then
+  echo "ERROR: $OUT_DIR already exists (possibly a dangling symlink). Refusing" >&2
+  echo "to remove or overwrite it automatically — it may contain files this" >&2
+  echo "script doesn't know about. Inspect it, then move it aside yourself" >&2
+  echo "(rather than delete it sight unseen), e.g.:" >&2
+  echo "  mv $OUT_DIR $OUT_DIR.previous" >&2
+  rmdir "$LOCK_DIR"
   exit 1
 fi
 STAGE_DIR="$(mktemp -d "./sku_build.XXXXXX")"
 cp "$BUILD_DIR/SKU.BIN" "$STAGE_DIR/SKU.BIN"
 cp "$WORK/SKU.xml" "$STAGE_DIR/SKU.xml"
-mv "$STAGE_DIR" "$OUT_DIR"
+mv -T "$STAGE_DIR" "$OUT_DIR"
 STAGE_DIR=""
+rmdir "$LOCK_DIR_HELD"
 
 SUCCESS=1
 
