@@ -50,9 +50,10 @@
 #     SKU.xml                - already-edited XML, used as-is if present
 #                              (takes priority over auto-extraction)
 #
-# --yes skips BOTH confirmation prompts: the SKU.xml identity-edit review,
-# and the untrusted-mount/qemu-exec warning. Only use it once you've already
-# reviewed both manually on a prior run.
+# --yes skips all three confirmation prompts: the SKU.xml identity-edit
+# review, the network-isolation reminder before jefferson parses the
+# untrusted config backup, and the untrusted-mount/qemu-exec warning. Only
+# use it once you've already reviewed all three manually on a prior run.
 #
 # Output:
 #   ./sku_build/SKU.BIN  - compiled, ready for `gigaflash -sku`
@@ -325,7 +326,7 @@ def replace_all_uniform(text, tag, new_value):
     # OLD value, silently reverting the edit for any new_value containing
     # e.g. a literal "\2"). A callable's return value is used verbatim.
     replaced = pattern.sub(lambda _m: f'<{tag}>{escaped}</{tag}>', text)
-    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [new_value] * len(matches):
+    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [escaped] * len(matches):
         sys.exit(f"ERROR: <{tag}> replacement didn't take effect as expected — aborting")
     return replaced
 
@@ -337,7 +338,7 @@ def replace_single(text, tag, new_value):
     escaped = escape(new_value)
     m = matches[0]
     replaced = text[:m.start()] + f'<{tag}>{escaped}</{tag}>' + text[m.end():]
-    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [new_value]:
+    if re.findall(f'<{tag}>([^<]*)</{tag}>', replaced) != [escaped]:
         sys.exit(f"ERROR: <{tag}> replacement didn't take effect as expected — aborting")
     return replaced
 
@@ -552,14 +553,38 @@ if problems:
 
 # The named-field list above only proves those specific fields survived -
 # it wouldn't notice a change to fan tables, sensors, or anything else in
-# the document. bmcprog only reformats whitespace (confirmed against a
-# real build's actual output), so stripping all whitespace from both
-# documents and comparing them in full catches everything else too.
-def strip_ws(text):
-    return re.sub(r'\s+', '', text)
+# the document. bmcprog only reformats indentation between elements
+# (confirmed against a real build's actual output), so build a structural
+# event stream of each document — element start (tag + sorted attrs), text
+# content, element end — and compare those. Text nodes that are *purely*
+# whitespace (indentation between sibling elements) are dropped entirely;
+# anything else is compared byte-for-byte, unstripped, so a real value like
+# "A B" vs "AB" (or a change hidden only by an all-whitespace-strip) is
+# still caught, unlike a naive "remove every whitespace char" comparison.
+import xml.parsers.expat
 
-if strip_ws(compiled_xml) != strip_ws(embedded_xml):
-    sys.exit("ERROR: embedded XML differs from compiled SKU.xml outside whitespace — "
+def canonical_events(xml_text):
+    events = []
+
+    def start_element(name, attrs):
+        events.append(('start', name, tuple(sorted(attrs.items()))))
+
+    def end_element(name):
+        events.append(('end', name))
+
+    def char_data(data):
+        if data.strip() != '':
+            events.append(('text', data))
+
+    p = xml.parsers.expat.ParserCreate()
+    p.StartElementHandler = start_element
+    p.EndElementHandler = end_element
+    p.CharacterDataHandler = char_data
+    p.Parse(xml_text, True)
+    return events
+
+if canonical_events(compiled_xml) != canonical_events(embedded_xml):
+    sys.exit("ERROR: embedded XML differs structurally from compiled SKU.xml — "
              "something beyond the named identity fields changed during compilation")
 
 def field(text, tag):
