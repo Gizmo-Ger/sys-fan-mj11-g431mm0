@@ -1,0 +1,6 @@
+esp32-mj11-uart-gateway/build/
+esp32-mj11-uart-gateway/managed_components/
+esp32-mj11-uart-gateway/main/config.h
+esp32-mj11-uart-gateway/sdkconfig
+esp32-mj11-uart-gateway/sdkconfig.old
+esp32-mj11-uart-gateway/**/*.bin
