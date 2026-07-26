@@ -36,6 +36,7 @@
 #define AUTH_PASSWORD_MAX 64
 #define AUTH_SALT_SIZE 16
 #define AUTH_HASH_SIZE 32
+#define AUTH_CACHE_KEY_SIZE 32
 #define AUTH_PBKDF2_ITERATIONS 20000
 #define REDFISH_RESPONSE_MAX 32768
 #define UART_LOG_SIZE 32768
@@ -56,6 +57,9 @@ static bool auth_configured;
 static char auth_user[AUTH_USER_MAX + 1];
 static uint8_t auth_salt[AUTH_SALT_SIZE];
 static uint8_t auth_hash[AUTH_HASH_SIZE];
+static uint8_t auth_cache_key[AUTH_CACHE_KEY_SIZE];
+static uint8_t auth_cache_hash[AUTH_HASH_SIZE];
+static bool auth_cache_valid;
 static char bmc_host[16];
 static char bmc_user[AUTH_USER_MAX + 1];
 static char bmc_password[AUTH_PASSWORD_MAX + 1];
@@ -280,6 +284,30 @@ static bool password_matches(const char *password)
     return difference == 0;
 }
 
+static bool auth_fingerprint(const char *value, uint8_t *fingerprint)
+{
+    uint8_t input[AUTH_CACHE_KEY_SIZE + 160];
+    size_t value_length = strlen(value);
+    size_t hash_length = 0;
+    if (value_length >= 160) return false;
+    memcpy(input, auth_cache_key, sizeof(auth_cache_key));
+    memcpy(input + sizeof(auth_cache_key), value, value_length);
+    return psa_crypto_init() == PSA_SUCCESS &&
+           psa_hash_compute(PSA_ALG_SHA_256, input,
+                            sizeof(auth_cache_key) + value_length,
+                            fingerprint, AUTH_HASH_SIZE,
+                            &hash_length) == PSA_SUCCESS &&
+           hash_length == AUTH_HASH_SIZE;
+}
+
+static bool constant_time_equal(const uint8_t *left, const uint8_t *right,
+                                size_t length)
+{
+    unsigned difference = 0;
+    for (size_t i = 0; i < length; i++) difference |= left[i] ^ right[i];
+    return difference == 0;
+}
+
 static void load_auth(void)
 {
     nvs_handle_t nvs = 0;
@@ -318,6 +346,7 @@ static esp_err_t save_auth(const char *user, const char *password)
         memcpy(auth_salt, salt, sizeof(auth_salt));
         memcpy(auth_hash, hash, sizeof(auth_hash));
         auth_configured = true;
+        auth_cache_valid = false;
     }
     return err;
 }
@@ -326,19 +355,36 @@ static bool authenticated(httpd_req_t *req)
 {
     char value[160];
     unsigned char decoded[AUTH_USER_MAX + AUTH_PASSWORD_MAX + 2];
+    uint8_t fingerprint[AUTH_HASH_SIZE];
     size_t decoded_len = 0;
     if (auth_configured &&
         httpd_req_get_hdr_value_str(req, "Authorization", value, sizeof(value)) == ESP_OK &&
         strncmp(value, "Basic ", 6) == 0 &&
-        mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &decoded_len,
-                              (const unsigned char *)value + 6, strlen(value + 6)) == 0) {
-        decoded[decoded_len] = '\0';
-        char *colon = strchr((char *)decoded, ':');
-        if (colon) {
-            *colon = '\0';
-            if (strcmp((char *)decoded, auth_user) == 0 &&
-                password_matches(colon + 1)) {
-                return true;
+        auth_fingerprint(value, fingerprint)) {
+        if (auth_cache_valid &&
+            constant_time_equal(fingerprint, auth_cache_hash,
+                                sizeof(auth_cache_hash))) {
+            return true;
+        }
+        if (mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &decoded_len,
+                                  (const unsigned char *)value + 6,
+                                  strlen(value + 6)) == 0) {
+            decoded[decoded_len] = '\0';
+            char *colon = strchr((char *)decoded, ':');
+            if (colon) {
+                *colon = '\0';
+                int64_t started = esp_timer_get_time();
+                bool matches = strcmp((char *)decoded, auth_user) == 0 &&
+                               password_matches(colon + 1);
+                ESP_LOGI(TAG, "Gateway-Anmeldung: %s, %lld ms",
+                         matches ? "erfolgreich" : "abgelehnt",
+                         (long long)((esp_timer_get_time() - started) / 1000));
+                if (matches) {
+                    memcpy(auth_cache_hash, fingerprint,
+                           sizeof(auth_cache_hash));
+                    auth_cache_valid = true;
+                    return true;
+                }
             }
         }
     }
@@ -574,6 +620,7 @@ static esp_err_t redfish_event(esp_http_client_event_t *event)
 static esp_err_t fetch_redfish(const char *path, char **json, size_t *length,
                                int *http_status)
 {
+    int64_t started = esp_timer_get_time();
     char url[160];
     snprintf(url, sizeof(url), "https://%s%s", bmc_host, path);
     redfish_response_t response = {
@@ -590,7 +637,7 @@ static esp_err_t fetch_redfish(const char *path, char **json, size_t *length,
         .auth_type = HTTP_AUTH_TYPE_BASIC,
         .event_handler = redfish_event,
         .user_data = &response,
-        .timeout_ms = 15000,
+        .timeout_ms = 6000,
         .buffer_size = 2048,
         .buffer_size_tx = 1024
     };
@@ -598,17 +645,23 @@ static esp_err_t fetch_redfish(const char *path, char **json, size_t *length,
     esp_err_t err = client ? esp_http_client_perform(client) : ESP_ERR_NO_MEM;
     if (err == ESP_ERR_HTTP_EAGAIN) {
         ESP_LOGW(TAG, "Redfish %s: Empfangstimeout, ein neuer Versuch", path);
+        response.length = 0;
+        response.data[0] = '\0';
         err = esp_http_client_perform(client);
     }
     int status = client ? esp_http_client_get_status_code(client) : 0;
     *http_status = status;
     if (client) esp_http_client_cleanup(client);
     if (err != ESP_OK || status != 200 || response.length == 0) {
-        ESP_LOGW(TAG, "Redfish %s fehlgeschlagen: %s, HTTP %d",
-                 path, esp_err_to_name(err), status);
+        ESP_LOGW(TAG, "Redfish %s fehlgeschlagen: %s, HTTP %d, %lld ms",
+                 path, esp_err_to_name(err), status,
+                 (long long)((esp_timer_get_time() - started) / 1000));
         free(response.data);
         return err == ESP_OK ? ESP_FAIL : err;
     }
+    ESP_LOGI(TAG, "Redfish %s: HTTP %d, %u Bytes, %lld ms",
+             path, status, (unsigned)response.length,
+             (long long)((esp_timer_get_time() - started) / 1000));
     *json = response.data;
     *length = response.length;
     return ESP_OK;
@@ -634,6 +687,7 @@ static esp_err_t redfish_data_handler(httpd_req_t *req)
         const char *path;
     } endpoints[] = {
         {"system", "/redfish/v1/Systems/Self"},
+        {"firmware", "/redfish/v1/UpdateService/FirmwareInventory?$expand=."},
         {"manager", "/redfish/v1/Managers/Self"},
         {"thermal", "/redfish/v1/Chassis/Self/Thermal"},
         {"power", "/redfish/v1/Chassis/Self/Power"},
@@ -1110,6 +1164,7 @@ void app_main(void)
 
     uart_log_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(uart_log_mutex ? ESP_OK : ESP_ERR_NO_MEM);
+    esp_fill_random(auth_cache_key, sizeof(auth_cache_key));
     load_auth();
 
     const esp_timer_create_args_t timer_args = {

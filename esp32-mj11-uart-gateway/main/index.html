@@ -67,6 +67,7 @@ let lang=localStorage.getItem('language')||((navigator.language||'').toLowerCase
 let stateMode='connecting';
 const tr=(de,en)=>lang==='de'?de:en;
 const decoder=new TextDecoder(),esc=s=>String(s??'–').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function renderConnectionState(){
   const labels={
     connecting:tr('verbinde …','connecting …'),
@@ -143,6 +144,7 @@ async function loadDashboard(){
   $('#updated').textContent=tr('Redfish wird abgefragt …','Querying Redfish …');
   try{
     const system=await rf('system');
+    const firmware=system.BiosVersion?.trim()?null:await rf('firmware').catch(()=>null);
     const manager=await rf('manager');
     const thermal=await rf('thermal');
     const power=await rf('power');
@@ -154,9 +156,10 @@ async function loadDashboard(){
     const nic=network.Members?.find(x=>x.Id==='bond0')||network.Members?.find(x=>x.Id!=='usb0')||network.Members?.[0]||{};
     const ip=nic.IPv4Addresses?.find(x=>x.Address&&x.Address!=='0.0.0.0')?.Address;
     const pc=power.PowerControl?.[0]||{},powerUsable=pc.Status?.State==='Enabled'&&Number.isFinite(pc.PowerConsumedWatts);
+    const biosVersion=system.BiosVersion?.trim()||firmware?.Members?.find(x=>x.Id==='BIOS')?.Version;
     $('#summary').innerHTML=[
       card(tr('System','System'),system.Model,rows([[tr('Zustand','State'),system.PowerState],[tr('Gesundheit','Health'),system.Status?.Health||system.Status?.HealthRollup]])),
-      card('BIOS',system.BiosVersion,rows([['CPU',system.ProcessorSummary?.Model?.trim()],['RAM',system.MemorySummary?.TotalSystemMemoryGiB?`${system.MemorySummary.TotalSystemMemoryGiB} GiB`:'–']])),
+      card('BIOS',biosVersion,rows([['CPU',system.ProcessorSummary?.Model?.trim()],['RAM',system.MemorySummary?.TotalSystemMemoryGiB?`${system.MemorySummary.TotalSystemMemoryGiB} GiB`:'–']])),
       card(tr('BMC-Firmware','BMC firmware'),manager.FirmwareVersion,rows([[tr('Gesundheit','Health'),manager.Status?.Health],[tr('BMC-Zeit','BMC time'),manager.DateTime]])),
       card(tr('BMC-Netzwerk','BMC network'),ip,rows([['Link',nic.LinkStatus],[tr('Geschwindigkeit','Speed'),nic.SpeedMbps?`${nic.SpeedMbps} ${tr('Mbit/s','Mbps')}`:'–'],['DHCP',nic.DHCPv4?.DHCPEnabled?tr('ja','yes'):tr('nein','no')]])),
       card(tr('Leistungsaufnahme','Power consumption'),powerUsable?`${pc.PowerConsumedWatts} W`:tr('nicht verfügbar','unavailable'),rows([[tr('Sensorzustand','Sensor state'),pc.Status?.State],[tr('Gesundheit','Health'),pc.Status?.Health]]))
@@ -204,7 +207,15 @@ $('#firmware').onchange=async e=>{
   if(!file||!confirm(`${file.name} ${tr('flashen und ESP32 neu starten?','flash and restart ESP32?')}`))return;
   stateMode='ota';renderConnectionState();
   const r=await fetch('/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
-  alert(await r.text());
+  if(!r.ok){alert(await r.text());return}
+  await sleep(1500);
+  for(;;){
+    try{
+      const ready=await fetch(`/info?ota=${Date.now()}`,{cache:'no-store'});
+      if(ready.ok){location.reload();return}
+    }catch{}
+    await sleep(1000);
+  }
 };
 applyLanguage();connect();initDashboard();loadEspStatus();setInterval(loadEspStatus,10000);
 </script>

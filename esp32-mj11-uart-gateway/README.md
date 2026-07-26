@@ -403,7 +403,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.9.1.bin
+build/mj11_uart_gateway-v1.9.4.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge
@@ -412,7 +412,8 @@ gebildet.
 
 Im Webterminal auf **OTA-Firmware** klicken, diese `.bin`-Datei auswählen und
 bestätigen. Der ESP32 prüft das Image, schaltet auf die zweite OTA-Partition um
-und startet neu. Für eine erste Installation ist weiterhin USB nötig.
+und startet neu. Die Weboberfläche wartet auf den ESP32 und lädt sich danach
+automatisch neu. Für eine erste Installation ist weiterhin USB nötig.
 
 Bei einem fehlgeschlagenen Upload bleibt die bislang gestartete Firmware
 unverändert aktiv. Ein automatischer Rollback nach einem zwar gültigen, aber
