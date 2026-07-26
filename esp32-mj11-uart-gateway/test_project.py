@@ -12,7 +12,7 @@ assert "GATEWAY_UART_TX_GPIO    17" in config
 assert "GATEWAY_TCP_PORT        2323" in config
 assert "gpio_set_pull_mode(GATEWAY_UART_RX_GPIO, GPIO_PULLUP_ONLY)" in main
 assert "line[used] == '\\r' || line[used] == '\\n'" in main
-assert 'set(PROJECT_VER "1.9.4")' in cmake
+assert 'set(PROJECT_VER "1.9.5")' in cmake
 assert '${CMAKE_PROJECT_NAME}-v${PROJECT_VER}.bin' in cmake
 assert "DEPENDS gen_project_binary" in cmake
 assert 'app->version, app->date, app->time' in main
@@ -63,6 +63,9 @@ assert 'data-en="Overview"' in (root / "main/index.html").read_text()
 assert 'data-en="Create account"' in (root / "main/setup.html").read_text()
 assert "signalBars(level)" in (root / "main/index.html").read_text()
 assert "if(ready.ok){location.reload();return}" in (root / "main/index.html").read_text()
+assert 'id="redfishStatus"' in (root / "main/index.html").read_text()
+assert "button.disabled=true;button.textContent=tr('Verbinde …','Connecting …')" in (root / "main/index.html").read_text()
+assert "return false;" in (root / "main/index.html").read_text()
 assert 'id="statusRefresh"' not in (root / "main/index.html").read_text()
 assert "complete_log_line_locked" in main
 assert "uart_suppressed_lines++" in main

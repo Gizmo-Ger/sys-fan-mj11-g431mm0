@@ -403,7 +403,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.9.4.bin
+build/mj11_uart_gateway-v1.9.5.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge

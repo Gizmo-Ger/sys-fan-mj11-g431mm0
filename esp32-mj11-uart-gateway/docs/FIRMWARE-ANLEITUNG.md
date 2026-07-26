@@ -269,7 +269,7 @@ Die wichtigsten Ausgabedateien sind:
 
 ```text
 mj11_uart_gateway.bin
-mj11_uart_gateway-v1.9.4.bin
+mj11_uart_gateway-v1.9.5.bin
 bootloader/bootloader.bin
 partition_table/partition-table.bin
 ota_data_initial.bin
@@ -420,13 +420,13 @@ Im Browser „OTA-Firmware“ wählen und ausschließlich diese Datei hochladen:
 Windows:
 
 ```text
-C:\tmp\mj11-build\mj11_uart_gateway-v1.9.4.bin
+C:\tmp\mj11-build\mj11_uart_gateway-v1.9.5.bin
 ```
 
 Ubuntu:
 
 ```text
-$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.4.bin
+$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.5.bin
 ```
 
 Der Dateiname wird aus `PROJECT_VER` erzeugt. Die unversionierte Datei bleibt
@@ -472,13 +472,13 @@ Vor einer Freigabe:
 Windows:
 
 ```powershell
-Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.4.bin" -Algorithm SHA256
+Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.5.bin" -Algorithm SHA256
 ```
 
 Ubuntu:
 
 ```bash
-sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.4.bin"
+sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.5.bin"
 ```
 
 Ein Freigabepaket sollte enthalten:
@@ -488,7 +488,7 @@ Quellcode ohne main/config.h
 main/config.example.h
 README.md
 docs/FIRMWARE-ANLEITUNG.md
-mj11_uart_gateway-v1.9.4.bin
+mj11_uart_gateway-v1.9.5.bin
 SHA256-Prüfsumme
 Versionsnummer
 ```

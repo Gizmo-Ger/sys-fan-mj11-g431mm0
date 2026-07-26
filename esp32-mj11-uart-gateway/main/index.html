@@ -12,7 +12,7 @@
   .esp-status>span{white-space:nowrap}.signal{display:inline-flex;align-items:flex-end;gap:1px;height:12px;margin-right:3px}
   .signal i{display:block;width:3px;background:#526675;border-radius:1px}.signal i:nth-child(1){height:3px}.signal i:nth-child(2){height:6px}.signal i:nth-child(3){height:9px}.signal i:nth-child(4){height:12px}.signal i.on{background:var(--ok)}
   button,.upload,.download,input,select{border:1px solid #526675;border-radius:4px;padding:.45rem .75rem}
-  button,.upload,.download{background:#263440;color:#fff;cursor:pointer}.download{text-decoration:none}button.active{background:#2878b8}.danger{border-color:#a84c4c}
+  button,.upload,.download{background:#263440;color:#fff;cursor:pointer}.download{text-decoration:none}button.active{background:#2878b8}button:disabled{opacity:.65;cursor:wait}.danger{border-color:#a84c4c}
   input{width:100%;background:#0d1317;color:#fff}select{background:#263440;color:#fff}.tabs{display:flex;gap:.5rem;padding:.7rem 1rem 0}
   main{padding:1rem}.view[hidden]{display:none}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.8rem}
   .card,.login{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:1rem}.card h3{margin:0 0 .7rem;font-size:.9rem;color:var(--muted)}
@@ -44,7 +44,8 @@
       <label for="bmcPassword" data-de="BMC-Passwort" data-en="BMC password">BMC password</label>
       <input id="bmcPassword" name="password" type="password" required maxlength="64">
       <p class="notice" data-de="Die BMC verwendet ein selbstsigniertes Zertifikat. Die Verbindung ist verschlüsselt, die Identität des BMC wird derzeit nicht geprüft." data-en="The BMC uses a self-signed certificate. The connection is encrypted, but the BMC identity is currently not verified.">The BMC uses a self-signed certificate. The connection is encrypted, but the BMC identity is currently not verified.</p>
-      <button type="submit" data-de="Verbinden" data-en="Connect">Connect</button>
+      <button id="redfishConnect" type="submit" data-de="Verbinden" data-en="Connect">Connect</button>
+      <p id="redfishStatus" class="notice" aria-live="polite"></p>
     </form>
   </section>
   <section id="dashboardData" hidden>
@@ -142,6 +143,7 @@ async function rf(kind){
 }
 async function loadDashboard(){
   $('#updated').textContent=tr('Redfish wird abgefragt …','Querying Redfish …');
+  if(!$('#redfishLogin').hidden)$('#redfishStatus').textContent=tr('Redfish wird geprüft …','Checking Redfish …');
   try{
     const system=await rf('system');
     const firmware=system.BiosVersion?.trim()?null:await rf('firmware').catch(()=>null);
@@ -178,9 +180,11 @@ async function loadDashboard(){
     $('#voltages').innerHTML=voltages.map(x=>card(x.Name,`${x.ReadingVolts.toFixed(3)} V`,rows([[tr('Gesundheit','Health'),x.Status?.Health]]))).join('')||card(tr('Keine Messwerte','No readings'),'–');
     $('#redfishLogin').hidden=true;$('#dashboardData').hidden=false;
     $('#updated').textContent=`${tr('Aktualisiert','Updated')}: ${new Date().toLocaleTimeString()}`;
+    return true;
   }catch(e){
     $('#dashboardData').hidden=true;$('#redfishLogin').hidden=false;
-    $('#redfishLogin .notice').textContent=e.message.includes('Zugangsdaten fehlen')?tr('Redfish-Anmeldung erforderlich.','Redfish login required.'):`${tr('Verbindung fehlgeschlagen','Connection failed')}: ${e.message.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim()}`;
+    $('#redfishStatus').textContent=e.message.includes('Zugangsdaten fehlen')?tr('Redfish-Anmeldung erforderlich.','Redfish login required.'):`${tr('Verbindung fehlgeschlagen','Connection failed')}: ${e.message.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim()}`;
+    return false;
   }
 }
 async function initDashboard(){
@@ -195,12 +199,23 @@ async function initDashboard(){
 }
 $('#redfishForm').onsubmit=async e=>{
   e.preventDefault();
-  const r=await fetch('/api/redfish/config',{method:'POST',body:new URLSearchParams(new FormData(e.target))});
-  if(!r.ok){alert(await r.text());return}
-  $('#bmcPassword').value='';loadDashboard();
+  const button=$('#redfishConnect');
+  button.disabled=true;button.textContent=tr('Verbinde …','Connecting …');
+  $('#redfishStatus').textContent=tr('Zugangsdaten werden übertragen …','Sending credentials …');
+  try{
+    const r=await fetch('/api/redfish/config',{method:'POST',body:new URLSearchParams(new FormData(e.target))});
+    if(!r.ok)throw new Error(await r.text());
+    $('#bmcPassword').value='';
+    $('#redfishStatus').textContent=tr('Zugangsdaten gespeichert. Redfish wird geprüft …','Credentials saved. Checking Redfish …');
+    await loadDashboard();
+  }catch(error){
+    $('#redfishStatus').textContent=`${tr('Verbindung fehlgeschlagen','Connection failed')}: ${error.message}`;
+  }finally{
+    button.disabled=false;button.textContent=button.dataset[lang];
+  }
 };
 $('#refresh').onclick=loadDashboard;
-$('#redfishLogout').onclick=async()=>{await fetch('/api/redfish/config',{method:'DELETE'});$('#deviceTitle').textContent='BMC Management';document.title='BMC Management';$('#dashboardData').hidden=true;$('#redfishLogin').hidden=false};
+$('#redfishLogout').onclick=async()=>{await fetch('/api/redfish/config',{method:'DELETE'});$('#deviceTitle').textContent='BMC Management';document.title='BMC Management';$('#dashboardData').hidden=true;$('#redfishLogin').hidden=false;$('#redfishStatus').textContent=''};
 $('#language').onchange=e=>{lang=e.target.value;applyLanguage();loadEspStatus();initDashboard()};
 $('#firmware').onchange=async e=>{
   const file=e.target.files[0];
