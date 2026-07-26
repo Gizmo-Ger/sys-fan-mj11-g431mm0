@@ -25,10 +25,9 @@
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/md.h"
-#include "mbedtls/pkcs5.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "psa/crypto.h"
 
 #define UART_PORT UART_NUM_2
 #define IO_BUFFER_SIZE 512
@@ -191,9 +190,30 @@ static size_t snapshot_uart_log(uint8_t *output)
 
 static bool derive_password(const char *password, const uint8_t *salt, uint8_t *hash)
 {
-    return mbedtls_pkcs5_pbkdf2_hmac_ext(
-        MBEDTLS_MD_SHA256, (const unsigned char *)password, strlen(password),
-        salt, AUTH_SALT_SIZE, AUTH_PBKDF2_ITERATIONS, AUTH_HASH_SIZE, hash) == 0;
+    psa_key_derivation_operation_t operation = PSA_KEY_DERIVATION_OPERATION_INIT;
+    psa_status_t status = psa_crypto_init();
+    if (status == PSA_SUCCESS) {
+        status = psa_key_derivation_setup(
+            &operation, PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_256));
+    }
+    if (status == PSA_SUCCESS) {
+        status = psa_key_derivation_input_integer(
+            &operation, PSA_KEY_DERIVATION_INPUT_COST, AUTH_PBKDF2_ITERATIONS);
+    }
+    if (status == PSA_SUCCESS) {
+        status = psa_key_derivation_input_bytes(
+            &operation, PSA_KEY_DERIVATION_INPUT_SALT, salt, AUTH_SALT_SIZE);
+    }
+    if (status == PSA_SUCCESS) {
+        status = psa_key_derivation_input_bytes(
+            &operation, PSA_KEY_DERIVATION_INPUT_PASSWORD,
+            (const uint8_t *)password, strlen(password));
+    }
+    if (status == PSA_SUCCESS) {
+        status = psa_key_derivation_output_bytes(&operation, hash, AUTH_HASH_SIZE);
+    }
+    psa_key_derivation_abort(&operation);
+    return status == PSA_SUCCESS;
 }
 
 static bool password_matches(const char *password)

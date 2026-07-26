@@ -19,7 +19,12 @@ assert 'app->version, app->date, app->time' in main
 assert '"Cache-Control", "no-store"' in main
 assert "GATEWAY_AUTH_" not in config
 assert 'nvs_open("mj11_auth"' in main
-assert "mbedtls_pkcs5_pbkdf2_hmac_ext" in main
+assert '#include "psa/crypto.h"' in main
+assert "PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_256)" in main
+assert "PSA_KEY_DERIVATION_INPUT_COST" in main
+assert "PSA_KEY_DERIVATION_INPUT_SALT" in main
+assert "PSA_KEY_DERIVATION_INPUT_PASSWORD" in main
+assert "mbedtls/pkcs5.h" not in main
 assert "if (!auth_configured)" in main
 assert (root / "main/setup.html").is_file()
 assert '"/api/redfish/data"' in main
