@@ -19,7 +19,7 @@ Die fertige Firmware bietet:
 
 - UART2 auf GPIO16/RX2 und GPIO17/TX2
 - 115200 Baud, 8 Datenbits, keine Parität, 1 Stoppbit
-- WLAN-Client mit Reconnect und wachsendem Retry-Abstand
+- WLAN-Client ohne Powersave, mit Reconnect und wachsendem Retry-Abstand
 - transparente TCP-UART-Bridge auf Port 2323
 - Webterminal per WebSocket
 - Redfish-Dashboard für BIOS/BMC, Netzwerk, Host-NIC-Inventar, Temperaturen, Lüfter und Spannungen
@@ -269,7 +269,7 @@ Die wichtigsten Ausgabedateien sind:
 
 ```text
 mj11_uart_gateway.bin
-mj11_uart_gateway-v1.9.0.bin
+mj11_uart_gateway-v1.9.1.bin
 bootloader/bootloader.bin
 partition_table/partition-table.bin
 ota_data_initial.bin
@@ -420,13 +420,13 @@ Im Browser „OTA-Firmware“ wählen und ausschließlich diese Datei hochladen:
 Windows:
 
 ```text
-C:\tmp\mj11-build\mj11_uart_gateway-v1.9.0.bin
+C:\tmp\mj11-build\mj11_uart_gateway-v1.9.1.bin
 ```
 
 Ubuntu:
 
 ```text
-$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.0.bin
+$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.1.bin
 ```
 
 Der Dateiname wird aus `PROJECT_VER` erzeugt. Die unversionierte Datei bleibt
@@ -471,13 +471,13 @@ Vor einer Freigabe:
 Windows:
 
 ```powershell
-Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.0.bin" -Algorithm SHA256
+Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.1.bin" -Algorithm SHA256
 ```
 
 Ubuntu:
 
 ```bash
-sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.0.bin"
+sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.1.bin"
 ```
 
 Ein Freigabepaket sollte enthalten:
@@ -487,7 +487,7 @@ Quellcode ohne main/config.h
 main/config.example.h
 README.md
 docs/FIRMWARE-ANLEITUNG.md
-mj11_uart_gateway-v1.9.0.bin
+mj11_uart_gateway-v1.9.1.bin
 SHA256-Prüfsumme
 Versionsnummer
 ```

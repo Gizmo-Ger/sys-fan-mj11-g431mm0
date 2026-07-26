@@ -590,12 +590,16 @@ static esp_err_t fetch_redfish(const char *path, char **json, size_t *length,
         .auth_type = HTTP_AUTH_TYPE_BASIC,
         .event_handler = redfish_event,
         .user_data = &response,
-        .timeout_ms = 7000,
+        .timeout_ms = 15000,
         .buffer_size = 2048,
         .buffer_size_tx = 1024
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_err_t err = client ? esp_http_client_perform(client) : ESP_ERR_NO_MEM;
+    if (err == ESP_ERR_HTTP_EAGAIN) {
+        ESP_LOGW(TAG, "Redfish %s: Empfangstimeout, ein neuer Versuch", path);
+        err = esp_http_client_perform(client);
+    }
     int status = client ? esp_http_client_get_status_code(client) : 0;
     *http_status = status;
     if (client) esp_http_client_cleanup(client);
@@ -1071,6 +1075,7 @@ static void init_wifi(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 static void init_uart(void)

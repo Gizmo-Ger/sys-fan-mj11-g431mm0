@@ -46,7 +46,7 @@ ein weiterer USB-TTL-Adapter ist nicht nötig.
 
 - UART2 auf GPIO16/GPIO17, standardmäßig 115200 8N1
 - interner Pull-up auf RX2 gegen Störzeichen bei offenem Header
-- WLAN-Client mit automatischem Reconnect (1 bis 30 Sekunden Backoff)
+- WLAN-Client ohne Powersave und mit automatischem Reconnect (1 bis 30 Sekunden Backoff)
 - TCP-Bridge auf Port 2323, mit Passwortanmeldung
 - Webterminal per WebSocket
 - Redfish-Dashboard für System, BIOS, BMC, Netzwerk, Host-NIC-Inventar, Temperaturen, Lüfter und Spannungen
@@ -403,7 +403,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.9.0.bin
+build/mj11_uart_gateway-v1.9.1.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge
