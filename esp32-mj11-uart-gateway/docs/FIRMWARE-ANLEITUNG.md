@@ -106,43 +106,45 @@ ein öffentliches Quellarchiv. `config.h` enthält die WLAN-Daten im Klartext.
 
 ## 4. ESP-IDF unter Windows installieren
 
-Für dieses Projekt ist ESP-IDF 5.5.x vorgesehen und mit 5.5.4 getestet.
-Espressif empfiehlt unter Windows den ESP-IDF Tools Installer. Er installiert
-Python, Git, CMake, Ninja und die Cross-Compiler gemeinsam:
-
-- [Offizielle ESP-IDF-5.5.4-Installation für Windows](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32/get-started/windows-setup.html)
-
-Kurze Installationspfade ohne Leerzeichen vermeiden Probleme. Ein bewährtes
-Beispiel ist:
-
-```text
-D:\esp\esp-idf
-```
-
-Nach der Installation am einfachsten „ESP-IDF PowerShell Environment“ aus dem
-Startmenü öffnen. In einer normalen PowerShell kann die Umgebung auch manuell
-aktiviert werden:
+Das Projekt wird in GitHub Actions mit ESP-IDF 5.5.4 und 6.0.2 geprüft.
+Für neue lokale Installationen ist ESP-IDF 6.0.2 vorgesehen. Espressif
+empfiehlt ab IDF 6 den ESP-IDF Installation Manager (EIM):
 
 ```powershell
-. "D:\esp\esp-idf\export.ps1"
+winget install Espressif.EIM
+```
+
+Danach:
+
+1. EIM öffnen.
+2. Unter **New Installation** eine benutzerdefinierte Installation starten.
+3. ESP-IDF **v6.0.2** und das Ziel ESP32 auswählen.
+4. Unter **Manage Installations** bei v6.0.2 **Open IDF Terminal** wählen.
+5. Version prüfen:
+
+```powershell
 idf.py --version
 ```
 
-Falls `export.ps1` Python nicht findet, zuerst die bei der Installation
-angelegte Python-Umgebung in `PATH` aufnehmen. Der konkrete Verzeichnisname
-hängt von IDF- und Python-Version ab:
-
-```powershell
-$env:Path = "$env:USERPROFILE\.espressif\python_env\idf5.5_py3.14_env\Scripts;$env:Path"
-. "D:\esp\esp-idf\export.ps1"
-idf.py --version
-```
-
-Erwartet wird beispielsweise:
+Erwartet wird:
 
 ```text
-ESP-IDF v5.5.4
+ESP-IDF v6.0.2
 ```
+
+Eine vorhandene Legacy-Installation von 5.5.4 darf parallel bestehen
+bleiben. Nicht deren `export.ps1` in das IDF-6-Terminal laden. Getrennte
+Buildordner verhindern vermischte CMake-Caches:
+
+```text
+C:\tmp\mj11-idf55
+C:\tmp\mj11-idf60
+```
+
+Referenzen:
+
+- [ESP-IDF 6.0.2: Installation und Einstieg](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/index.html)
+- [ESP-IDF 6.0.2: Windows-Kommandozeile](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/windows-start-project.html)
 
 ### Windows-Pfadlänge vermeiden
 
@@ -157,7 +159,7 @@ Der Quellordner kann an seiner bisherigen Stelle bleiben.
 
 ## 5. ESP-IDF unter Ubuntu installieren
 
-Die folgenden Pakete entsprechen der offiziellen ESP-IDF-5.5.4-Anleitung:
+Die folgenden Pakete entsprechen der offiziellen ESP-IDF-6.0.2-Anleitung:
 
 ```bash
 sudo apt update
@@ -165,27 +167,27 @@ sudo apt install git wget flex bison gperf python3 python3-pip python3-venv \
   cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
 ```
 
-ESP-IDF 5.5.4 installieren:
+ESP-IDF 6.0.2 installieren:
 
 ```bash
 mkdir -p "$HOME/esp"
 cd "$HOME/esp"
-git clone --recursive --branch v5.5.4 \
-  https://github.com/espressif/esp-idf.git
-cd esp-idf
+git clone --recursive --branch v6.0.2 \
+  https://github.com/espressif/esp-idf.git esp-idf-v6.0.2
+cd esp-idf-v6.0.2
 ./install.sh esp32
 ```
 
 Vor jeder Arbeitssitzung die Umgebung aktivieren:
 
 ```bash
-. "$HOME/esp/esp-idf/export.sh"
+. "$HOME/esp/esp-idf-v6.0.2/export.sh"
 idf.py --version
 ```
 
 Referenz:
 
-- [Offizielle ESP-IDF-5.5.4-Installation für Linux](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32/get-started/linux-macos-setup.html)
+- [Offizielle ESP-IDF-6.0.2-Installation für Linux](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/linux-macos-setup-legacy.html)
 
 Für den seriellen Port benötigt der Benutzer unter Ubuntu meist die Gruppe
 `dialout`:
@@ -246,7 +248,7 @@ In der aktivierten ESP-IDF-PowerShell:
 
 ```powershell
 cd "PFAD\ZU\esp32-mj11-uart-gateway"
-$buildDir = "C:\tmp\mj11-build"
+$buildDir = "C:\tmp\mj11-idf60"
 
 idf.py -B $buildDir set-target esp32
 idf.py -B $buildDir build
@@ -256,7 +258,7 @@ idf.py -B $buildDir build
 
 ```bash
 cd /pfad/zu/esp32-mj11-uart-gateway
-BUILD_DIR="$HOME/esp-build/mj11-build"
+BUILD_DIR="$HOME/esp-build/mj11-idf60"
 
 idf.py -B "$BUILD_DIR" set-target esp32
 idf.py -B "$BUILD_DIR" build
@@ -274,7 +276,7 @@ ota_data_initial.bin
 
 `idf.py build` erzeugt Bootloader, Partitionstabelle und Anwendung. Das ist
 auch in Espressifs
-[Windows-Projektanleitung](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32/get-started/windows-setup.html#build-the-project)
+[Windows-Projektanleitung](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/windows-start-project.html#build-the-project)
 beschrieben.
 
 ## 8. ESP32 erstmals über USB flashen
@@ -495,16 +497,12 @@ Versionsnummer
 
 Die ESP-IDF-Umgebung ist in diesem Terminal nicht aktiviert.
 
-Windows:
-
-```powershell
-. "D:\esp\esp-idf\export.ps1"
-```
+Windows: Im EIM bei der Installation v6.0.2 **Open IDF Terminal** wählen.
 
 Ubuntu:
 
 ```bash
-. "$HOME/esp/esp-idf/export.sh"
+. "$HOME/esp/esp-idf-v6.0.2/export.sh"
 ```
 
 ### Compiler wurde nicht im PATH gefunden

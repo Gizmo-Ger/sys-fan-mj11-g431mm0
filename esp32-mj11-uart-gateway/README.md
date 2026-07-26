@@ -6,7 +6,8 @@ Bestandteile von ESP-IDF: TCP, HTTP/WebSocket, OTA und Task-Watchdog.
 Die mitgelieferte Zwei-Slot-OTA-Partitionierung setzt die bei diesen DevKits
 üblichen **4 MB Flash** voraus.
 
-Das Projekt ist für ESP-IDF 5.5.4 und das Ziel `esp32` ausgelegt.
+Das Projekt wird mit ESP-IDF 5.5.4 und 6.0.2 für das Ziel `esp32` geprüft.
+Für neue lokale Installationen wird ESP-IDF 6.0.2 empfohlen.
 
 Die vollständige Anleitung von der Installation bis zur fertigen Firmware
 steht in [docs/FIRMWARE-ANLEITUNG.md](docs/FIRMWARE-ANLEITUNG.md).
@@ -245,22 +246,28 @@ Konto nicht.
 
 ## ESP-IDF unter Windows aktivieren
 
-In einer normalen PowerShell ist `idf.py` erst nach Aktivierung von ESP-IDF
-verfügbar. Für die vorhandene Installation auf diesem PC:
+ESP-IDF 6.0.2 wird unter Windows bevorzugt mit dem Espressif Installation
+Manager (EIM) installiert:
 
 ```powershell
-$env:Path = "C:\Users\shs\.espressif\python_env\idf5.5_py3.14_env\Scripts;$env:Path"
-. "D:\esp\esp-idf\export.ps1"
+winget install Espressif.EIM
+```
+
+Im EIM unter **New Installation** eine benutzerdefinierte Installation von
+**v6.0.2** anlegen. Anschließend unter **Manage Installations** bei v6.0.2
+**Open IDF Terminal** wählen und prüfen:
+
+```powershell
 idf.py --version
 ```
 
-Die Ausgabe sollte `ESP-IDF v5.5.4` enthalten. Diese Aktivierung ist nach dem
-Öffnen jeder neuen PowerShell erneut nötig. Alternativ direkt die
-**ESP-IDF 5.5 PowerShell** aus dem Windows-Startmenü verwenden.
+Erwartet wird `ESP-IDF v6.0.2`. Die vorhandene 5.5.4-Installation kann
+parallel bestehen bleiben. Für jede IDF-Version einen eigenen Buildordner
+verwenden, beispielsweise `C:\tmp\mj11-idf55` und `C:\tmp\mj11-idf60`.
 
 Falls `idf.py set-target esp32` anschließend
 `xtensa-esp32-elf-gcc was not found in the PATH` meldet, wurde die lokale
-ESP-IDF-Installation nur für ein RISC-V-Ziel wie `esp32c6` registriert.
+Legacy-ESP-IDF-Installation nur für ein RISC-V-Ziel wie `esp32c6` registriert.
 Einmalig das klassische ESP32-Ziel nachtragen:
 
 ```powershell
@@ -280,8 +287,8 @@ Danach ESP32 per USB anschließen, den COM-Port im Geräte-Manager prüfen und
 im Projektordner bauen und flashen:
 
 ```powershell
-cd "C:\Users\shs\Documents\Codex\2026-07-24\referenced-chatgpt-conversation-this-is-untrusted\outputs\esp32-mj11-uart-gateway"
-$buildDir = "C:\tmp\mj11-build"
+cd "C:\Users\shs\Documents\Codex\2026-07-24\referenced-chatgpt-conversation-this-is-untrusted\outputs\sys-fan-mj11-g431mm0\esp32-mj11-uart-gateway"
+$buildDir = "C:\tmp\mj11-idf60"
 idf.py -B $buildDir set-target esp32
 idf.py -B $buildDir build
 idf.py -B $buildDir -p COM5 flash monitor
@@ -304,7 +311,7 @@ idf.py build
 
 ## ESP-IDF unter Ubuntu installieren
 
-Die Firmware ist für ESP-IDF 5.5.4 ausgelegt. Installation nach Espressif:
+Die Firmware wird mit ESP-IDF 6.0.2 geprüft. Installation nach Espressif:
 
 ```bash
 sudo apt update
@@ -313,14 +320,14 @@ sudo apt install -y git wget flex bison gperf python3 python3-pip \
   libusb-1.0-0
 mkdir -p ~/esp
 cd ~/esp
-git clone --recursive --branch v5.5.4 \
-  https://github.com/espressif/esp-idf.git
-cd esp-idf
+git clone --recursive --branch v6.0.2 \
+  https://github.com/espressif/esp-idf.git esp-idf-v6.0.2
+cd esp-idf-v6.0.2
 ./install.sh esp32
 . ./export.sh
 ```
 
-In jeder neuen Shell zuerst `. ~/esp/esp-idf/export.sh` ausführen.
+In jeder neuen Shell zuerst `. ~/esp/esp-idf-v6.0.2/export.sh` ausführen.
 
 ## Unter Ubuntu bauen und per USB flashen
 
