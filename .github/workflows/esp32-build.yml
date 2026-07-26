@@ -31,5 +31,6 @@ jobs:
       - name: Build firmware
         working-directory: esp32-mj11-uart-gateway
         run: |
+          . "$IDF_PATH/export.sh"
           idf.py set-target esp32
           idf.py build
