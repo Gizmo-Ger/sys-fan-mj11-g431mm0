@@ -16,8 +16,13 @@ permissions:
 
 jobs:
   build:
+    name: ESP-IDF ${{ matrix.idf }}
     runs-on: ubuntu-latest
-    container: espressif/idf:v5.5.4
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: [v5.5.4, v6.0.2]
+    container: espressif/idf:${{ matrix.idf }}
     steps:
       - uses: actions/checkout@v7
 
