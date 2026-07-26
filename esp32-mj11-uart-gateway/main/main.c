@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,8 @@
 #define UART_LOG_LINE_MAX 512
 #define UART_LOG_MARKER_MAX 96
 #define UART_LOG_SNAPSHOT_MAX (UART_LOG_SIZE + UART_LOG_LINE_MAX + UART_LOG_MARKER_MAX)
+#define SYSTEM_LOG_SIZE 8192
+#define SYSTEM_LOG_LINE_MAX 512
 
 static const char *TAG = "mj11-gateway";
 static httpd_handle_t http_server;
@@ -68,6 +71,11 @@ static uint64_t uart_suppressed_lines;
 static uint64_t uart_rx_bytes;
 static uint64_t uart_tx_bytes;
 static SemaphoreHandle_t uart_log_mutex;
+static uint8_t system_log[SYSTEM_LOG_SIZE];
+static size_t system_log_head;
+static size_t system_log_length;
+static portMUX_TYPE system_log_lock = portMUX_INITIALIZER_UNLOCKED;
+static vprintf_like_t console_vprintf;
 
 extern const unsigned char index_html_start[] asm("_binary_index_html_start");
 extern const unsigned char index_html_end[] asm("_binary_index_html_end");
@@ -78,6 +86,49 @@ _Static_assert(sizeof(GATEWAY_WIFI_SSID) <= 33, "WLAN-SSID ist zu lang");
 _Static_assert(sizeof(GATEWAY_WIFI_PASSWORD) <= 65, "WLAN-Passwort ist zu lang");
 _Static_assert(sizeof(GATEWAY_HOSTNAME) <= 33, "Hostname ist zu lang");
 _Static_assert(GATEWAY_UART_BAUD > 0, "UART-Baudrate muss groesser als 0 sein");
+
+static void append_system_log(const uint8_t *data, size_t length)
+{
+    portENTER_CRITICAL(&system_log_lock);
+    if (length >= SYSTEM_LOG_SIZE) {
+        memcpy(system_log, data + length - SYSTEM_LOG_SIZE, SYSTEM_LOG_SIZE);
+        system_log_head = 0;
+        system_log_length = SYSTEM_LOG_SIZE;
+    } else {
+        size_t first = MIN(length, SYSTEM_LOG_SIZE - system_log_head);
+        memcpy(system_log + system_log_head, data, first);
+        memcpy(system_log, data + first, length - first);
+        system_log_head = (system_log_head + length) % SYSTEM_LOG_SIZE;
+        system_log_length = MIN(system_log_length + length, SYSTEM_LOG_SIZE);
+    }
+    portEXIT_CRITICAL(&system_log_lock);
+}
+
+static int system_log_vprintf(const char *format, va_list args)
+{
+    char line[SYSTEM_LOG_LINE_MAX];
+    va_list copy;
+    va_copy(copy, args);
+    int length = vsnprintf(line, sizeof(line), format, copy);
+    va_end(copy);
+    if (length > 0) {
+        append_system_log((const uint8_t *)line,
+                          MIN((size_t)length, sizeof(line) - 1));
+    }
+    return console_vprintf ? console_vprintf(format, args) : vprintf(format, args);
+}
+
+static size_t snapshot_system_log(uint8_t *output)
+{
+    portENTER_CRITICAL(&system_log_lock);
+    size_t length = system_log_length;
+    size_t start = (system_log_head + SYSTEM_LOG_SIZE - length) % SYSTEM_LOG_SIZE;
+    size_t first = MIN(length, SYSTEM_LOG_SIZE - start);
+    memcpy(output, system_log + start, first);
+    memcpy(output + first, system_log, length - first);
+    portEXIT_CRITICAL(&system_log_lock);
+    return length;
+}
 
 static void replace_client(volatile int *slot, int fd)
 {
@@ -690,6 +741,27 @@ static esp_err_t log_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t system_log_handler(httpd_req_t *req)
+{
+    if (!authenticated(req)) {
+        return ESP_OK;
+    }
+    uint8_t *snapshot = malloc(SYSTEM_LOG_SIZE);
+    if (!snapshot) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Nicht genug RAM fuer Systemlog");
+        return ESP_OK;
+    }
+    size_t length = snapshot_system_log(snapshot);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition",
+                       "attachment; filename=\"esp32-system-log.txt\"");
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    esp_err_t err = httpd_resp_send(req, (const char *)snapshot, length);
+    free(snapshot);
+    return err;
+}
+
 static esp_err_t websocket_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -778,7 +850,7 @@ static esp_err_t ota_handler(httpd_req_t *req)
 static void start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 11;
+    config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
     ESP_ERROR_CHECK(httpd_start(&http_server, &config));
 
@@ -800,6 +872,10 @@ static void start_http_server(void)
     };
     const httpd_uri_t log_uri = {
         .uri = "/api/log", .method = HTTP_GET, .handler = log_handler
+    };
+    const httpd_uri_t system_log_uri = {
+        .uri = "/api/system-log", .method = HTTP_GET,
+        .handler = system_log_handler
     };
     const httpd_uri_t setup_uri = {
         .uri = "/setup", .method = HTTP_POST, .handler = setup_handler
@@ -829,6 +905,7 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &info_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &status_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &log_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &system_log_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &ws_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &ota_uri));
 }
@@ -1016,6 +1093,8 @@ static void init_uart(void)
 
 void app_main(void)
 {
+    console_vprintf = esp_log_set_vprintf(system_log_vprintf);
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

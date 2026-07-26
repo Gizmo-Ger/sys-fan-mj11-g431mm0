@@ -34,6 +34,7 @@ Die fertige Firmware bietet:
 - Task-Watchdog für den UART-Datenpfad
 - Firmwareversion und Build-Zeit im Webheader
 - 32-KB-RAM-Ringpuffer mit Zeilen-Deduplizierung und geschütztem Logdownload
+- geschützter 8-KB-ESP32-Systemlog für WLAN-, TLS- und HTTP-Diagnose
 - kompakte ESP32-Statuswerte im Header für WLAN, Laufzeit, Heap, Clients und UART-Zähler
 - Schutz gegen veraltetes HTML durch `Cache-Control: no-store`
 
@@ -268,7 +269,7 @@ Die wichtigsten Ausgabedateien sind:
 
 ```text
 mj11_uart_gateway.bin
-mj11_uart_gateway-v1.8.0.bin
+mj11_uart_gateway-v1.9.0.bin
 bootloader/bootloader.bin
 partition_table/partition-table.bin
 ota_data_initial.bin
@@ -419,13 +420,13 @@ Im Browser „OTA-Firmware“ wählen und ausschließlich diese Datei hochladen:
 Windows:
 
 ```text
-C:\tmp\mj11-build\mj11_uart_gateway-v1.8.0.bin
+C:\tmp\mj11-build\mj11_uart_gateway-v1.9.0.bin
 ```
 
 Ubuntu:
 
 ```text
-$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.8.0.bin
+$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.0.bin
 ```
 
 Der Dateiname wird aus `PROJECT_VER` erzeugt. Die unversionierte Datei bleibt
@@ -470,13 +471,13 @@ Vor einer Freigabe:
 Windows:
 
 ```powershell
-Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.8.0.bin" -Algorithm SHA256
+Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.0.bin" -Algorithm SHA256
 ```
 
 Ubuntu:
 
 ```bash
-sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.8.0.bin"
+sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.0.bin"
 ```
 
 Ein Freigabepaket sollte enthalten:
@@ -486,7 +487,7 @@ Quellcode ohne main/config.h
 main/config.example.h
 README.md
 docs/FIRMWARE-ANLEITUNG.md
-mj11_uart_gateway-v1.8.0.bin
+mj11_uart_gateway-v1.9.0.bin
 SHA256-Prüfsumme
 Versionsnummer
 ```
@@ -583,6 +584,12 @@ betrifft ausschließlich den RAM-Log; WebSocket- und TCP-Terminal erhalten
 weiterhin jedes UART-Byte. Der Ringpuffer belastet den Flash nicht und ist nach
 einem ESP32-Neustart leer. Der Zähler `↻` im Header zeigt die insgesamt
 zusammengefassten Zeilen seit dem Neustart.
+
+**ESP32-Systemlog herunterladen** speichert die letzten 8 KB der
+ESP-IDF-Laufzeitmeldungen als `esp32-system-log.txt`. Darin stehen unter
+anderem WLAN-Reconnects sowie TLS- und HTTP-Client-Fehler. Auch dieser
+Ringpuffer liegt nur im RAM, schreibt nicht in den Flash und beginnt nach
+jedem Neustart leer.
 
 ## 15. Erweiterungsmöglichkeiten
 

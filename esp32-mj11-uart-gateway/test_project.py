@@ -12,7 +12,7 @@ assert "GATEWAY_UART_TX_GPIO    17" in config
 assert "GATEWAY_TCP_PORT        2323" in config
 assert "gpio_set_pull_mode(GATEWAY_UART_RX_GPIO, GPIO_PULLUP_ONLY)" in main
 assert "line[used] == '\\r' || line[used] == '\\n'" in main
-assert 'set(PROJECT_VER "1.8.0")' in cmake
+assert 'set(PROJECT_VER "1.9.0")' in cmake
 assert '${CMAKE_PROJECT_NAME}-v${PROJECT_VER}.bin' in cmake
 assert "DEPENDS gen_project_binary" in cmake
 assert 'app->version, app->date, app->time' in main
@@ -32,6 +32,10 @@ assert '"hostnics"' in main
 assert "#define UART_LOG_SIZE 32768" in main
 assert '"/api/status"' in main
 assert '"/api/log"' in main
+assert "#define SYSTEM_LOG_SIZE 8192" in main
+assert "esp_log_set_vprintf(system_log_vprintf)" in main
+assert '"/api/system-log"' in main
+assert 'filename=\\"esp32-system-log.txt\\"' in main
 assert "append_uart_log(data, n)" in main
 assert '"https://%s%s"' in main
 assert "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y" in (root / "sdkconfig.defaults").read_text()

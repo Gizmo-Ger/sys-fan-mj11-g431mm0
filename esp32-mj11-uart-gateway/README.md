@@ -56,6 +56,7 @@ ein weiterer USB-TTL-Adapter ist nicht nötig.
 - Firmwareversion und Build-Zeit im Webterminal-Header
 - 32-KB-RAM-Ringpuffer mit Zusammenfassung identischer Folgezeilen
 - geschützter UART-Logdownload beim UART-Terminal
+- geschützter 8-KB-ESP32-Systemlog für WLAN-, TLS- und HTTP-Diagnose
 - kompakte ESP32-Statuswerte im Header: WLAN-Balken, Laufzeit, Heap, Clients und UART-Zähler
 - Firmware-Upload im Browser (OTA, zwei App-Partitionen)
 - einmalige Konto-Ersteinrichtung im Browser; Passwort-Hash in NVS
@@ -402,7 +403,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.8.0.bin
+build/mj11_uart_gateway-v1.9.0.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge
