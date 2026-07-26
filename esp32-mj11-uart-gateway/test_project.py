@@ -12,7 +12,10 @@ assert "GATEWAY_UART_TX_GPIO    17" in config
 assert "GATEWAY_TCP_PORT        2323" in config
 assert "gpio_set_pull_mode(GATEWAY_UART_RX_GPIO, GPIO_PULLUP_ONLY)" in main
 assert "line[used] == '\\r' || line[used] == '\\n'" in main
-assert 'set(PROJECT_VER "1.9.5")' in cmake
+assert "normalize_tcp_newlines" in main
+assert "if (*previous_was_cr && byte == '\\n')" in main
+assert "*previous_was_cr = line[used] == '\\r'" in main
+assert 'set(PROJECT_VER "1.9.6")' in cmake
 assert '${CMAKE_PROJECT_NAME}-v${PROJECT_VER}.bin' in cmake
 assert "DEPENDS gen_project_binary" in cmake
 assert 'app->version, app->date, app->time' in main

@@ -108,7 +108,8 @@ AUTH dein-passwort
 
 Nach `OK` arbeitet die Verbindung transparent: Daten vom Netzwerk gehen an
 UART2, UART-Daten zurück an den TCP-Client. Alternativ funktionieren
-`nc`/Netcat oder andere einfache TCP-Terminals.
+`nc`/Netcat oder andere einfache TCP-Terminals. Von PuTTY gesendetes `CR+LF`
+wird als ein einzelnes `CR` an die BMC-Konsole weitergegeben.
 
 Ein WebSocket-Client und ein TCP-Client können gleichzeitig verbunden sein
 und empfangen dieselbe UART-Ausgabe. Beide dürfen auch senden; deshalb nicht
@@ -403,7 +404,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.9.5.bin
+build/mj11_uart_gateway-v1.9.6.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge

@@ -968,8 +968,9 @@ static void start_http_server(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &ota_uri));
 }
 
-static bool tcp_login(int fd)
+static bool tcp_login(int fd, bool *previous_was_cr)
 {
+    *previous_was_cr = false;
     if (!auth_configured) {
         send(fd, "SETUP REQUIRED\r\n", 16, 0);
         return false;
@@ -985,6 +986,7 @@ static bool tcp_login(int fd)
             return false;
         }
         if (line[used] == '\r' || line[used] == '\n') {
+            *previous_was_cr = line[used] == '\r';
             line[used] = '\0';
             break;
         }
@@ -998,9 +1000,26 @@ static bool tcp_login(int fd)
     return ok;
 }
 
+static size_t normalize_tcp_newlines(const uint8_t *input, size_t length,
+                                     uint8_t *output, bool *previous_was_cr)
+{
+    size_t written = 0;
+    for (size_t i = 0; i < length; i++) {
+        uint8_t byte = input[i];
+        if (*previous_was_cr && byte == '\n') {
+            *previous_was_cr = false;
+            continue;
+        }
+        output[written++] = byte;
+        *previous_was_cr = byte == '\r';
+    }
+    return written;
+}
+
 static void tcp_server_task(void *arg)
 {
     uint8_t data[IO_BUFFER_SIZE];
+    uint8_t normalized[IO_BUFFER_SIZE];
     for (;;) {
         int server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
         if (server < 0) {
@@ -1029,7 +1048,8 @@ static void tcp_server_task(void *arg)
             }
             struct timeval timeout = {.tv_sec = 30};
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-            if (!tcp_login(fd)) {
+            bool previous_was_cr;
+            if (!tcp_login(fd, &previous_was_cr)) {
                 close(fd);
                 continue;
             }
@@ -1041,7 +1061,9 @@ static void tcp_server_task(void *arg)
             while ((n = recv(fd, data, sizeof(data), 0)) > 0 ||
                    (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
                 if (n > 0) {
-                    write_uart(data, n);
+                    size_t length = normalize_tcp_newlines(
+                        data, n, normalized, &previous_was_cr);
+                    if (length > 0) write_uart(normalized, length);
                 }
             }
             replace_client(&tcp_client, -1);
