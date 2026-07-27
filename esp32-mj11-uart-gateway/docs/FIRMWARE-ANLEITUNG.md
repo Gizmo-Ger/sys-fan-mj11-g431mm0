@@ -269,7 +269,7 @@ Die wichtigsten Ausgabedateien sind:
 
 ```text
 mj11_uart_gateway.bin
-mj11_uart_gateway-v1.9.6.bin
+mj11_uart_gateway-vX.Y.Z.bin
 bootloader/bootloader.bin
 partition_table/partition-table.bin
 ota_data_initial.bin
@@ -341,7 +341,10 @@ Der Terminalbereich bleibt ohne angeschlossenen UART erwartungsgemäß leer.
 Auf der Seite **Übersicht** anschließend BMC-IP, BMC-Benutzer und
 BMC-Passwort eingeben. Diese Redfish-Zugangsdaten bleiben nur im RAM und
 müssen nach jedem ESP32-Neustart erneut eingegeben werden. **Redfish
-abmelden** löscht sie sofort.
+abmelden** löscht sie sofort. Die Firmware bestätigt die Übernahme unmittelbar
+und prüft sie danach mit der ersten Dashboard-Abfrage gegen den
+System-Endpunkt. Bei HTTP 401 werden die Redfish-Zugangsdaten automatisch
+verworfen.
 
 Das MJ11 verwendet ein selbstsigniertes HTTPS-Zertifikat. Die Firmware
 verschlüsselt die Verbindung, prüft dieses Zertifikat in der aktuellen
@@ -421,13 +424,13 @@ Im Browser „OTA-Firmware“ wählen und ausschließlich diese Datei hochladen:
 Windows:
 
 ```text
-C:\tmp\mj11-build\mj11_uart_gateway-v1.9.6.bin
+C:\tmp\mj11-build\mj11_uart_gateway-vX.Y.Z.bin
 ```
 
 Ubuntu:
 
 ```text
-$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.6.bin
+$HOME/esp-build/mj11-build/mj11_uart_gateway-vX.Y.Z.bin
 ```
 
 Der Dateiname wird aus `PROJECT_VER` erzeugt. Die unversionierte Datei bleibt
@@ -473,13 +476,13 @@ Vor einer Freigabe:
 Windows:
 
 ```powershell
-Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-v1.9.6.bin" -Algorithm SHA256
+Get-FileHash "C:\tmp\mj11-build\mj11_uart_gateway-vX.Y.Z.bin" -Algorithm SHA256
 ```
 
 Ubuntu:
 
 ```bash
-sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-v1.9.6.bin"
+sha256sum "$HOME/esp-build/mj11-build/mj11_uart_gateway-vX.Y.Z.bin"
 ```
 
 Ein Freigabepaket sollte enthalten:
@@ -489,7 +492,7 @@ Quellcode ohne main/config.h
 main/config.example.h
 README.md
 docs/FIRMWARE-ANLEITUNG.md
-mj11_uart_gateway-v1.9.6.bin
+mj11_uart_gateway-vX.Y.Z.bin
 SHA256-Prüfsumme
 Versionsnummer
 ```

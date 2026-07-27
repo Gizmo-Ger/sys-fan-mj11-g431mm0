@@ -192,9 +192,9 @@ Unter **Übersicht** BMC-IP, BMC-Benutzer und BMC-Passwort eingeben. Diese
 Daten werden nicht im Flash gespeichert und gehen beim ESP32-Neustart oder
 mit **Redfish abmelden** verloren. Die Firmware fragt ausschließlich die
 bestätigten MJ11-Endpunkte für System, Manager, Thermal, Power und
-Manager-Netzwerk ab. Zuerst wird die Anmeldung einmal gegen den Manager-
-Endpunkt geprüft; die übrigen Dashboard-Abfragen starten nur nach erfolgreicher
-Authentifizierung.
+Manager-Netzwerk ab. Die Zugangsdaten werden sofort in den RAM übernommen;
+die erste Dashboard-Abfrage prüft sie gegen den System-Endpunkt. Bei HTTP 401
+verwirft die Firmware die Redfish-Zugangsdaten automatisch.
 
 Die Verbindung zum BMC verwendet HTTPS. Weil dessen werkseitiges Zertifikat
 selbstsigniert ist, wird es derzeit nicht verifiziert. Die Verbindung ist
@@ -404,7 +404,7 @@ python3 test_project.py
 Nach einem erfolgreichen Build liegt das OTA-Image hier:
 
 ```text
-build/mj11_uart_gateway-v1.9.6.bin
+build/mj11_uart_gateway-vX.Y.Z.bin
 ```
 
 Zusätzlich bleibt `mj11_uart_gateway.bin` für die ESP-IDF-Flashwerkzeuge
