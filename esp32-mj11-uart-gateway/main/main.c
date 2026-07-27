@@ -557,23 +557,6 @@ static esp_err_t redfish_config_handler(httpd_req_t *req)
     strcpy(bmc_password, password);
     memset(password, 0, strlen(password));
 
-    char *probe;
-    size_t probe_length;
-    int status;
-    esp_err_t err = fetch_redfish("/redfish/v1/Managers/Self",
-                                  &probe, &probe_length, &status);
-    if (err != ESP_OK) {
-        memset(bmc_host, 0, sizeof(bmc_host));
-        memset(bmc_user, 0, sizeof(bmc_user));
-        memset(bmc_password, 0, sizeof(bmc_password));
-        char message[112];
-        snprintf(message, sizeof(message),
-                 "Redfish-Anmeldung fehlgeschlagen: HTTP %d, %s",
-                 status, esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, message);
-        return ESP_OK;
-    }
-    free(probe);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"configured\":true}");
 }
@@ -710,6 +693,11 @@ static esp_err_t redfish_data_handler(httpd_req_t *req)
     int status;
     esp_err_t err = fetch_redfish(path, &json, &length, &status);
     if (err != ESP_OK) {
+        if (status == 401) {
+            memset(bmc_host, 0, sizeof(bmc_host));
+            memset(bmc_user, 0, sizeof(bmc_user));
+            memset(bmc_password, 0, sizeof(bmc_password));
+        }
         char message[112];
         snprintf(message, sizeof(message),
                  "Redfish-Abfrage fehlgeschlagen: HTTP %d, %s",

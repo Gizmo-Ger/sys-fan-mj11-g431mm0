@@ -5,6 +5,7 @@ main = (root / "main/main.c").read_text()
 config = (root / "main/config.example.h").read_text()
 partitions = (root / "partitions.csv").read_text()
 cmake = (root / "CMakeLists.txt").read_text()
+html = (root / "main/index.html").read_text()
 
 assert "UART_NUM_2" in main
 assert "GATEWAY_UART_RX_GPIO    16" in config
@@ -15,7 +16,8 @@ assert "line[used] == '\\r' || line[used] == '\\n'" in main
 assert "normalize_tcp_newlines" in main
 assert "if (*previous_was_cr && byte == '\\n')" in main
 assert "*previous_was_cr = line[used] == '\\r'" in main
-assert 'set(PROJECT_VER "1.9.6")' in cmake
+assert "if (status == 401)" in main
+assert 'set(PROJECT_VER "1.9.7")' in cmake
 assert '${CMAKE_PROJECT_NAME}-v${PROJECT_VER}.bin' in cmake
 assert "DEPENDS gen_project_binary" in cmake
 assert 'app->version, app->date, app->time' in main
@@ -68,6 +70,9 @@ assert "signalBars(level)" in (root / "main/index.html").read_text()
 assert "if(ready.ok){location.reload();return}" in (root / "main/index.html").read_text()
 assert 'id="redfishStatus"' in (root / "main/index.html").read_text()
 assert "button.disabled=true;button.textContent=tr('Verbinde …','Connecting …')" in (root / "main/index.html").read_text()
+assert "terminalText.appendData(terminalPending)" in html
+assert "button.focus()" in html
+assert "await loadDashboard()" in html
 assert "return false;" in (root / "main/index.html").read_text()
 assert 'id="statusRefresh"' not in (root / "main/index.html").read_text()
 assert "complete_log_line_locked" in main
