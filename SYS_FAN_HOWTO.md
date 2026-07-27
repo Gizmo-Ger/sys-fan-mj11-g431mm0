@@ -1015,6 +1015,159 @@ open threads above:
   this repo documents (older firmware = SSH still works; newer firmware =
   locked out via `DenyUsers`).
 
+## Confirming PeterF's u-boot theory: live console access via ESP32/JTAG bridge
+
+Followed up on the "raw unsigned flash from the u-boot prompt" lead above with
+actual console access on the spare board.
+
+- **Setup.** An ESP32 wired to the board's UART/JTAG header exposes a
+  password-gated TCP console bridge (port 2323) over WiFi. From an analysis
+  VM, bridged that TCP socket to a local PTY with
+  `socat -d -d pty,raw,echo=0,link=/tmp/ttyBMC tcp:<esp32-ip>:2323`, giving any
+  serial tool — a plain terminal, or scripted tooling like
+  [depthcharge](https://github.com/tetrelsec/depthcharge) — transparent access
+  as if it were a real `/dev/ttyUSB0`. `depthcharge`'s own console code opens
+  a device path directly (`serial.Serial(port=...)`, not `serial_for_url()`),
+  so it can't attach to a raw TCP/WiFi bridge itself — the PTY bridge is
+  required either way, `depthcharge` or not.
+
+- **Zero-second autoboot, defeated without needing fast reflexes.** U-Boot
+  2013.07 on this board runs `bootdelay=0` — `Hit any key to stop autoboot: 0`
+  leaves no real reaction window, over a WiFi-bridged console least of all.
+  Worked around it by flooding a harmless character (space) into the console
+  continuously through the whole power-on/reboot sequence, so a byte is
+  already sitting in the UART receive buffer the instant U-Boot's autoboot
+  check runs, regardless of bridge latency. Landed cleanly at the
+  `AST2500EVB>` prompt every time.
+
+- **Confirms PeterF's suspicion directly.** `printenv` shows `verify=n` —
+  image verification is explicitly disabled at the bootloader level. Combined
+  with `fmh` showing `CheckSum: Not Computed` on every single flash module
+  (not just the kernel), this matches his theory that the signature check
+  lives in the flashing tool / normal boot path, not enforced by u-boot
+  itself. Not yet tested whether a raw unsigned image can actually be
+  *written* and booted from this prompt (see "Not yet tested" below,
+  deliberately deferred) — but the verification-is-off half of the theory is
+  now confirmed rather than just suspected.
+
+- **No authentication of any kind exists at this level.** The full command
+  set includes `md`/`mm`/`mw`/`nm` (arbitrary memory read/write),
+  `erase`/`protect` (flash erase and write-protect toggle), `setenv`/`saveenv`
+  (persistent environment changes), and `fwupdate` (firmware recovery mode).
+  Anyone who can catch this prompt — over UART, JTAG, or, as here, a
+  WiFi-bridged UART adapter — has complete, unauthenticated control over the
+  board, one level below everything else this document has worked around.
+
+### Full U-Boot environment (spare board, as captured)
+
+```
+autoload=no
+baudrate=0x1c200
+bootcmd=bootfmh
+bootdelay=0
+bootselector=1
+do_memtest=0
+eth1addr=XX:XX:XX:XX:XX:XX
+ethact=ast_eth0
+ethaddr=XX:XX:XX:XX:XX:XX
+loads_echo=1
+memtest_pass=idle
+recentlyprogfw=1
+stderr=serial
+stdin=serial
+stdout=serial
+verify=n
+```
+
+`recentlyprogfw=1` and `bootselector=1` line up with the dual-image bank state
+already documented elsewhere in this doc (`DualImageCfg.ini`,
+`FwUploadSelector=1`).
+
+### Flash Module Header (FMH) layout — full partition table via `fmh`
+
+```
+boot      @ 0x20000000  size 0x0003b42c  ver 12.01.000000
+conf      @ 0x20060000  size 0x001f0000  ver 12.01.000000  (bank 1)
+conf      @ 0x20260000  size 0x001f0000  ver 12.01.000000  (bank 2)
+ec        @ 0x20460000  size 0x00000000  ver 1.13.000000
+root      @ 0x20560000  size 0x022d6000  ver 12.01.000000  LoadAddr 0x81000000
+osimage   @ 0x22840040  size 0x002a9e80  ver 12.01.000000  (matches kernel "2.7 MiB" in boot log exactly)
+dre       @ 0x22b00000  size 0x00070000  ver 12.01.000000
+www       @ 0x22b80000  size 0x00512000  ver 12.01.000000
+testapps  @ 0x230a0040  size 0x00021fa0  ver 2.04.000000
+ast2500e  @ 0x23ef0040  size 0x0000009f  ver 12.49.06
+```
+
+Every module shows `CheckSum: Not Computed` in the `fmh` command's own
+output — not specific to one partition, it's blanket across the whole flash.
+
+### FMH header format, reverse-engineered from raw memory dumps
+
+Cross-referencing raw `md.b` dumps of three modules with different version
+strings (`conf`, `testapps`, `ast2500e`) against `fmh`'s parsed output pinned
+down every field:
+
+```c
+struct fmh_header {          // 64 bytes, precedes each module's payload
+    char     magic[8];        // 0x00: "$MODULE$"
+    uint32_t unknown_const;   // 0x08: 0x00400801, identical across every module seen
+    uint32_t region_size;     // 0x0c: total allocated region size
+    uint32_t self_offset;     // 0x10: this header's own offset from flash base 0x20000000
+    uint8_t  unknown_byte;    // 0x17: varies per module (0x67/0x86/0xa3) - unconfirmed, possibly a short hash
+    char     name[8];         // 0x18: module name, null-padded, no terminator if exactly 8 chars
+    uint8_t  ver_major;       // 0x20
+    uint8_t  ver_minor;       // 0x21
+    uint16_t type;            // 0x22
+    uint32_t location_offset; // 0x24: payload location, offset from flash base
+    uint32_t size;            // 0x28: payload size in bytes
+    uint16_t flags;           // 0x2c
+    uint32_t load_addr;       // 0x2e: 0xffffffff sentinel on every module seen
+    uint32_t checksum;        // 0x32: non-zero, varies per module — a real stored value despite "Not Computed" in the fmh command's display
+    char     ver_patch[6];    // 0x36: ASCII, e.g. "000000" or "06"
+    uint16_t pad;             // 0x3c: 00 00
+    uint16_t tail_magic;      // 0x3e: 0xaa55
+};
+```
+
+Version string display = `f"{ver_major}.{ver_minor:02d}.{ver_patch}"`,
+reproducing `12.01.000000`, `2.04.000000`, and `12.49.06` exactly across the
+three modules checked. `CheckSum: Not Computed` in the `fmh` command's output
+is misleading — offset `0x32` does hold a real, non-zero, per-module value;
+the display just doesn't read or verify it, consistent with `verify=n`.
+
+Solid enough to hand-craft a valid FMH module header from scratch, matching
+PeterF's original manual-construction approach to `SKU.BIN` — this is the
+same container format, generalized across the whole flash rather than just
+the SKU region.
+
+### Platform codename confirmed: WolfPass
+
+The `ast2500e` module's payload (right after its header) is plaintext, not
+binary:
+
+```
+FW_VERSION=12.49.06
+FW_DATE=Dec 24 2020
+FW_BUILD_TIME=16:51:53 CST
+FW_DESC=WolfPass 32MB v12-update-2.03
+FW_PRODUCTID=1
+FW_RELEASEID=RR9
+FW_CODEBASEVERSION=3.X
+```
+
+"WolfPass" matches the `/conf/BMC1/wolfpass/` directory already referenced
+elsewhere in this repo's investigation — confirms it's this board's internal
+AMI/Gigabyte platform codename, not an artifact.
+
+### Not yet tested
+
+Whether `verify=n` actually means a **write** of a raw/unsigned image from
+this prompt succeeds (vs. verification happening at some other stage
+regardless of this flag) is deliberately untested so far — loading a
+deliberately mismatched image and attempting to boot/flash it carries real
+bricking risk on a board with only one spare available. Left as the next step
+for whoever picks this back up, same caution PeterF applied to his own board.
+
 ## The missing web-UI SSH controls are cosmetic, not functional
 
 On the production board's web UI, **Settings → Services** (which on the
