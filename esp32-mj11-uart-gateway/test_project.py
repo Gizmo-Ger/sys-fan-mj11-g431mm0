@@ -80,6 +80,6 @@ assert "uart_suppressed_lines++" in main
 assert "previous line repeated %llu additional times" in main
 assert '\\"suppressedLines\\":%llu' in main
 assert "docs/FIRMWARE-GUIDE.md" in readme
-assert 'idf.py -B "C:\\tmp\\mj11-build" build' in guide
+assert 'idf.py -B "C:\\tmp\\mj11-idf60" build' in guide
 assert "MJ11 VCC        do not connect" in guide
 print("Project structure and fixed hardware defaults: OK")
