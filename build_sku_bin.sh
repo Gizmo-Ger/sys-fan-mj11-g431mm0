@@ -298,8 +298,9 @@ PYEOF
   echo "    found: $ORIG_XML"
 
   echo "==> Applying identity edit"
-  echo "    ProductName -> $NEW_PRODUCT_NAME"
-  echo "    FanProfile  -> $NEW_FAN_PROFILE"
+  echo "    ProductName      -> $NEW_PRODUCT_NAME"
+  echo "    BoardProductName -> $NEW_PRODUCT_NAME"
+  echo "    FanProfile       -> $NEW_FAN_PROFILE"
   python3 - "$ORIG_XML" "$WORK/SKU.xml" "$NEW_PRODUCT_NAME" "$NEW_FAN_PROFILE" <<'PYEOF'
 import re, sys
 from xml.sax.saxutils import escape
@@ -343,16 +344,18 @@ def replace_single(text, tag, new_value):
     return replaced
 
 new = replace_all_uniform(old, 'ProductName', new_product_name)
+new = replace_all_uniform(new, 'BoardProductName', new_product_name)
 new = replace_single(new, 'FanProfile', new_fan_profile)
 
 def normalize(text):
     text = re.sub(r'(<ProductName>)[^<]*(</ProductName>)', r'\1\2', text)
+    text = re.sub(r'(<BoardProductName>)[^<]*(</BoardProductName>)', r'\1\2', text)
     text = re.sub(r'(<FanProfile>)[^<]*(</FanProfile>)', r'\1\2', text)
     return text
 
-# Verify the edit touched nothing outside these two fields.
+# Verify the edit touched nothing outside these three fields.
 if normalize(old) != normalize(new):
-    sys.exit("ERROR: edit touched content outside ProductName/FanProfile — aborting")
+    sys.exit("ERROR: edit touched content outside ProductName/BoardProductName/FanProfile — aborting")
 
 open(out_path, 'w', encoding='utf-8').write(new)
 print(f"    wrote {out_path}")

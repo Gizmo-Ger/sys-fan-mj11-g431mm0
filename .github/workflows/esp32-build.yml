@@ -1,0 +1,41 @@
+name: ESP32 compile check
+
+on:
+  push:
+    paths:
+      - "esp32-mj11-uart-gateway/**"
+      - ".github/workflows/esp32-build.yml"
+  pull_request:
+    paths:
+      - "esp32-mj11-uart-gateway/**"
+      - ".github/workflows/esp32-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ESP-IDF ${{ matrix.idf }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: [v5.5.4, v6.0.2]
+    container: espressif/idf:${{ matrix.idf }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare example configuration
+        run: cp esp32-mj11-uart-gateway/main/config.example.h esp32-mj11-uart-gateway/main/config.h
+
+      - name: Check project structure
+        working-directory: esp32-mj11-uart-gateway
+        run: python3 test_project.py
+
+      - name: Build firmware
+        working-directory: esp32-mj11-uart-gateway
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32
+          idf.py build

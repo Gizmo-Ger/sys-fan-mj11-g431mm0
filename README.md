@@ -22,6 +22,11 @@ Credit to PeterF, who first documented the underlying issue on ServeTheHome
   extracts `SKU.xml` from a config backup, applies your identity edit,
   extracts and runs the BMC's own `bmcprog` compiler under `qemu-arm`
   emulation, and outputs a ready-to-flash `SKU.BIN`. Run in a disposable VM.
+- **[ESP32_UART_GATEWAY.md](ESP32_UART_GATEWAY.md)** — short wiring, build,
+  flash and connection guide for the wireless BMC UART gateway.
+- **[esp32-mj11-uart-gateway/](esp32-mj11-uart-gateway/)** — ESP-IDF 5.5.4
+  source for the ESP32 DevKit V1 gateway. GitHub Actions compiles it as a
+  check but deliberately does not publish a firmware binary.
 
 ## Quick summary
 

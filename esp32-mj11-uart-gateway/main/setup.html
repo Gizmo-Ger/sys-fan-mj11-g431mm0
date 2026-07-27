@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up BMC gateway</title>
+<style>
+  :root{color-scheme:dark}body{margin:0;background:#101418;color:#d8e2e8;font:15px system-ui;display:grid;place-items:center;min-height:100vh}
+  main{box-sizing:border-box;width:min(420px,calc(100% - 2rem));padding:2rem;background:#182027;border:1px solid #344651;border-radius:8px}
+  h1{font-size:1.3rem;margin-top:0}label{display:block;margin:1rem 0 .35rem}input,button{box-sizing:border-box;width:100%;padding:.7rem;border-radius:4px}
+  input{border:1px solid #526675;background:#0d1317;color:#fff}button{margin-top:1.2rem;border:0;background:#2878b8;color:#fff;font-weight:600;cursor:pointer}
+  small{color:#9eb0bb}select{float:right;margin-bottom:1rem;padding:.4rem;background:#263440;color:#fff;border:1px solid #526675;border-radius:4px}
+</style>
+<main>
+  <select id="language" aria-label="Language"><option value="de">Deutsch</option><option value="en">English</option></select>
+  <h1 data-de="BMC-Gateway einrichten" data-en="Set up BMC gateway">Set up BMC gateway</h1>
+  <p data-de="Lege das Administratorkonto für Webterminal, OTA und TCP-Zugang fest." data-en="Create the administrator account for the web terminal, OTA and TCP access.">Create the administrator account for the web terminal, OTA and TCP access.</p>
+  <form method="post" action="/setup">
+    <label for="username" data-de="Benutzername" data-en="Username">Username</label>
+    <input id="username" name="username" required maxlength="32" autocomplete="username" autofocus>
+    <label for="password" data-de="Passwort" data-en="Password">Password</label>
+    <input id="password" name="password" type="password" required minlength="12" maxlength="64" autocomplete="new-password">
+    <small data-de="Mindestens 12 Zeichen. Im Benutzernamen sind Buchstaben, Zahlen, Punkt, Minus und Unterstrich erlaubt." data-en="At least 12 characters. Usernames may contain letters, numbers, dots, hyphens and underscores.">At least 12 characters. Usernames may contain letters, numbers, dots, hyphens and underscores.</small>
+    <button type="submit" data-de="Konto anlegen" data-en="Create account">Create account</button>
+  </form>
+</main>
+<script>
+const select=document.querySelector('#language');
+let lang=localStorage.getItem('language')||((navigator.language||'').toLowerCase().startsWith('de')?'de':'en');
+function applyLanguage(){
+  document.documentElement.lang=lang;select.value=lang;
+  document.querySelectorAll('[data-de]').forEach(x=>x.textContent=x.dataset[lang]);
+  document.title=lang==='de'?'BMC-Gateway einrichten':'Set up BMC gateway';
+  localStorage.setItem('language',lang);
+}
+select.onchange=e=>{lang=e.target.value;applyLanguage()};
+applyLanguage();
+</script>
+</html>
