@@ -85,7 +85,7 @@ idf.py -p /dev/serial/by-id/YOUR_CP210X_DEVICE flash monitor
 ```
 
 The complete ESP-IDF installation instructions are in the
-[firmware guide](esp32-mj11-uart-gateway/docs/FIRMWARE-ANLEITUNG.md).
+[firmware guide](esp32-mj11-uart-gateway/docs/FIRMWARE-GUIDE.md).
 
 ## Connect
 

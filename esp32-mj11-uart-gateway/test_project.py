@@ -56,8 +56,8 @@ assert "CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y" in (root / "sdkconfig.defaults
 assert "CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH=y" in (root / "sdkconfig.defaults").read_text()
 assert "ota_0" in partitions and "ota_1" in partitions
 readme = (root / "README.md").read_text()
-guide = (root / "docs/FIRMWARE-ANLEITUNG.md").read_text()
-assert "| VCC | **nicht verbinden** |" in readme
+guide = (root / "docs/FIRMWARE-GUIDE.md").read_text()
+assert "| VCC | **do not connect** |" in readme
 assert "GND | TX | RX | VCC" in readme
 assert "e.key.toLowerCase()==='v'" in (root / "main/index.html").read_text()
 assert "system.Model?.trim()||'BMC'" in (root / "main/index.html").read_text()
@@ -79,7 +79,7 @@ assert "complete_log_line_locked" in main
 assert "uart_suppressed_lines++" in main
 assert "previous line repeated %llu additional times" in main
 assert '\\"suppressedLines\\":%llu' in main
-assert "docs/FIRMWARE-ANLEITUNG.md" in readme
+assert "docs/FIRMWARE-GUIDE.md" in readme
 assert 'idf.py -B "C:\\tmp\\mj11-build" build' in guide
-assert "MJ11 VCC        nicht verbinden" in guide
-print("Projektstruktur und feste Hardwarevorgaben: OK")
+assert "MJ11 VCC        do not connect" in guide
+print("Project structure and fixed hardware defaults: OK")
