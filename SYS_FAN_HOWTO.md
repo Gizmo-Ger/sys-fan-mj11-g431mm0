@@ -832,63 +832,167 @@ evidence, on top of the `DenyUsers`/Redfish/cron findings above, that the
 config layer and the boot-time enforcement layer on 12.61.39 don't agree
 with each other anywhere they overlap.
 
-### The Set command (`0x6a`) — length found, exact payload format unsolved
+### The Set command (`0x6a`) — solved, and live-confirmed working on spare
 
-Explored on spare only, never attempted on production. Every step below
-returned a non-zero completion code, meaning the request was rejected
-before any `system()` call could fire — same safety property as every
-other rejected attempt in this document; nothing on spare changed state
-at any point.
+**This works.** Fully solved, and proven end-to-end on spare by actually
+toggling SSH off and back on again over IPMI-over-LAN, with no console,
+no UART, no physical access — just an authenticated `ipmitool` call from
+anywhere on the network. Explored on spare only so far (never attempted
+on production); everything below is confirmed there.
 
-- Naively replaying spare's own 44-byte GET response verbatim as the Set
-  payload (`ServiceID=0x20`, `Enable=1`, same everything) returned `0xC7`
-  (request data length invalid) — so Set's expected length isn't 44, and
-  isn't the same as GET's response shape.
-- Bisected by truncating that same payload to shorter lengths (8, 12, 16,
-  20, 24, 28, 32, 36 bytes). Lengths 8–32 all returned `0xC7`. **Length 36
-  returned a different code, `0x82`** — meaning 36 is the correct (or at
-  least an accepted) request length; something changed between 32 and 36.
-- Traced `0x82` via disassembly (Capstone, ARM mode, no source needed) to
-  `libipmiamioemserviceconf.so`+`0x28ac`:
-  ```
-  mvn  r3, #0x7d      ; r3 = 0x82 — the actual completion code returned
-  mov  r0, #0x82      ; unrelated: severity arg for the debug-log call below
-  strb r3, [r6]       ; store completion code into the response
-  ```
-  reached via `bne #0x28ac` after a call at `0x2410` (`bl #0x13d0`) that
-  takes the ServiceID byte and a byte from near the end of the request
-  buffer — almost certainly a port-validation check (`isPortAllowed` /
-  `isValidStandardPort`, both imported by this library). So: **length is
-  right, content isn't** — most likely because GET's response field
-  order/offsets and Set's expected request field order don't match
-  (e.g. GET may include an echoed field Set doesn't expect, shifting
-  every later field by a few bytes and landing garbage where the port
-  value needs to be).
+**Full 36-byte request format, confirmed field-by-field** by disassembling
+`AMISetServiceConf` (`libipmiamioemserviceconf.so.6.8.0`, ARM, symbol
+`0x2104` on spare / `0x210c` on production — same function, 8 bytes of
+address drift between firmware versions) and cross-checking every field
+against a live `AMIGetServiceConf` (`0x69`) response, which returns the
+same fields plus two extra read-only ones at the end:
 
-**Stopping here, documented as an unsolved lead rather than continued
-guessing.** What's confirmed: netFn `0x32`, cmd `0x6a`, exactly 36 bytes,
-first 4 bytes are `[ServiceID, 0, 0, 0]` same as Get. What's still open:
-the exact byte layout of the remaining 32 bytes — almost certainly
-`Enable` + interface name + port + timeout fields similar to what Get
-returns, just not in the same arrangement. Solving it fully would need
-tracing the byte-shuffle sequence between the function's entry and the
-`0x2410` validation call in full (a few dozen more instructions than
-covered here) — real additional reverse-engineering work, not a quick
-guess. Whoever picks this up: start from `AMISetServiceConf` at file
-offset matching symbol address `0x210c` in `libipmiamioemserviceconf.so`,
-same technique as above (Capstone, ARM mode — Thumb mode disassembles to
-garbage on this binary, ARM mode is correct).
+```
+offset 0-3   (4 bytes, LE u32): service bitmask, e.g. 0x20 = SSH.
+                                 Passed through GetINT32UBitsNum() to
+                                 resolve a bit-index (0x20 -> index 5),
+                                 used to look up the service in an
+                                 internal dispatch table.
+offset 4     (1 byte):          current_state — strictly 0 or 1 only
+                                 (anything else: hard reject)
+offset 5-21  (17 bytes):        interface_name, ASCII, null-padded
+                                 (e.g. "bond0")
+offset 22-25 (4 bytes, LE u32): nonsecure_port (0xFFFFFFFF sentinel
+                                 = disabled, e.g. for SSH which has no
+                                 plaintext mode)
+offset 26-29 (4 bytes, LE u32): secure_port — rejected outright if it
+                                 equals 80 (the plain-HTTP port)
+offset 30-33 (4 bytes, LE u32): session_timeout
+offset 34    (1 byte):          active_sessions
+offset 35    (1 byte):          max_sessions
+```
 
-**If Set is eventually solved and does turn out to only give a one-boot
-bring-up** (plausible, since the underlying action found earlier is
-literally `/etc/init.d/ssh force-stop; /etc/init.d/ssh start &`, the same
-one-shot script as the console method): that would still fully replace
-the SOL/UART/JTAG console requirement in the "one-time fix" section
-above — an authenticated IPMI-over-LAN or local-KCS call is a much lower
-bar than physical/serial console access. It would not solve persistence
-(still needs PeterF's u-boot theory or a cron root-cause, per the
-sections above), but it would make the one-boot workaround usable
-remotely, any time, without hands on the hardware.
+Confirmed against a live GET on spare (`ipmitool -I lanplus -H <ip> -U
+admin -P <pass> raw 0x32 0x69 0x20 0x00 0x00 0x00`), whose response
+decoded to exactly `ncml.conf`'s `[ssh]` values (`interface_name=bond0`,
+`secure_port=22`, `session_timeout=600`, `active_sessions=255`, etc.),
+plus a trailing 8 bytes (`MinSessionInactivityTimeout`,
+`MaxSessionInactivityTimeout`) that GET includes but Set has no room
+for — those two are read-only via this command.
+
+**The length itself was confirmed empirically, not just by table
+inspection.** A zero-filled payload bisected across lengths 4–48 in steps
+of 4 returned completion code `0xC7` (request data length invalid) at
+every length except exactly 36, which returned a different code —
+proving 36 is the correct length independent of content.
+
+**Content validation goes two levels deep, and most of it isn't fatal.**
+`AMISetServiceConf` builds a local struct from the request and hands it
+to `Validate_SetServiceConfiguration()` — which turns out to live in a
+different library, `libncml.so.6.14.0` (the same "ncml" as `ncml.conf`).
+That function:
+
+- Resolves the service bit-index to an internal service name string
+  (e.g. `"ssh"`) via an internal table — not something the caller sends.
+- Loads `/conf/ncml.conf` itself (`iniparser_loaddef`) and looks up
+  `"<service_name>:interface_name"` to compare against the submitted
+  interface name. Confirmed this passes when the submitted value
+  matches the live config (tested with `interface_name="bond0"`,
+  matching `ncml.conf`'s actual current value exactly).
+- Fetches `nonsecure_port`, `secure_port`, `session_timeout`, and the two
+  read-only timeout fields from the same ini via `IniGetUInt()`, and
+  compares each against the submitted value — **but a mismatch here only
+  triggers a debug log call (`IDBG_LINUXAPP_Runtime_DbgOut`), execution
+  continues either way.** Tested directly: submitting `session_timeout`
+  as 601 instead of the live 600 did not by itself cause rejection.
+- Beyond `Validate_SetServiceConfiguration`, `AMISetServiceConf` also calls
+  `validate_active_session_count()` (a *third* library — `libracsessioninfo.so`)
+  with `(service_bit_index, max_sessions, some_global_flag)`. Fully
+  disassembled: it only returns success if `max_sessions == 255` **and**
+  the live active-session-count register independently also reads `255`
+  (a sentinel-match case that basically never holds in practice), **or**
+  if `max_sessions == 0`. Submitting the real observed value (`0x80`/128,
+  itself a stale/wrong value — see the GET/`ncml.conf` mismatch noted
+  above) or the file's real value (`255`) both fail this check
+  (completion code `0x82`). **`max_sessions = 0x00` is the value that
+  actually works.**
+
+**The confirmed working payload** (36 bytes, `netFn 0x32`, `cmd 0x6a`),
+tested and verified live on spare:
+
+```
+0x20 0x00 0x00 0x00          ServiceID = SSH (0x20)
+0x01                          current_state (1=enable, 0=disable — this is
+                               the field that actually does something)
+0x62 0x6f 0x6e 0x64 0x30
+0x00 0x00 0x00 0x00 0x00
+0x00 0x00 0x00 0x00 0x00
+0x00 0x00                     interface_name = "bond0", null-padded to 17
+                               bytes — must match ncml.conf's current value
+0xff 0xff 0xff 0xff           nonsecure_port = disabled (SSH has no
+                               plaintext mode)
+0x16 0x00 0x00 0x00           secure_port = 22
+0x58 0x02 0x00 0x00           session_timeout = 600 (mismatches vs.
+                               ncml.conf are logged, not fatal)
+0xff                          active_sessions = 255
+0x00                          max_sessions = 0  <-- the fix; anything else
+                               here fails validate_active_session_count()
+```
+
+As a raw `ipmitool` command:
+
+```
+ipmitool -I lanplus -H <bmc-ip> -U admin -P <password> raw 0x32 0x6a \
+  0x20 0x00 0x00 0x00 0x01 0x62 0x6f 0x6e 0x64 0x30 0x00 0x00 0x00 0x00 \
+  0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff 0xff 0xff 0x16 0x00 \
+  0x00 0x00 0x58 0x02 0x00 0x00 0xff 0x00
+```
+
+Change only the `current_state` byte (position 5, right after the
+4-byte ServiceID) to `0x00` to disable or `0x01` to enable — everything
+else should match the live config, fetched first via a GET
+(`raw 0x32 0x69 0x20 0x00 0x00 0x00`, take its first 36 bytes, note it
+returns 44 — the trailing 8 bytes, the two `*InactivityTimeout` fields,
+aren't part of the Set payload at all).
+
+**Live-tested on spare, full round trip:**
+1. Sent the payload above with `current_state=0x00` — accepted (exit 0,
+   no completion-code error).
+2. GET confirmed `current_state` had actually changed to `0x00` in the
+   live config (not just validated — genuinely written).
+3. Attempted an SSH connection: `Connection refused` on port 22 — the
+   command didn't just update a config value, it actually executed
+   `/etc/init.d/ssh stop`.
+4. Sent the same payload with `current_state=0x01` — accepted.
+5. GET confirmed `current_state=0x01` again; SSH connection succeeded
+   immediately after.
+
+One open detail: `max_sessions` in the GET readback stays at `0x80`
+regardless of what's sent (even `0x00`) — `0` appears to be treated as a
+"don't touch this field" sentinel by whatever write step runs after
+validation, rather than being written literally. Doesn't affect the
+`current_state` toggle at all, just means that one specific field can't
+currently be set to an arbitrary value through this command.
+
+**Not yet tried on production.** Everything above is from spare, where
+SSH already works — this was deliberately proven on a board where
+breaking something is fully reversible before ever touching production.
+The mechanism itself is platform-generic (same libraries, same command
+structure, same `ncml.conf` format documented as present on production
+too), so there's good reason to expect it works the same way there — but
+that's an inference, not something tested. The one meaningful difference
+to check before trying: production's `[ssh]` section in `ncml.conf` may
+have a different `interface_name`/port than spare's, since the payload's
+`interface_name` and `secure_port` fields must match the live config or
+the earlier-described `iniparser`-based check will reject it — read
+production's actual current values via GET first, don't assume spare's.
+
+**Given `bootcmd`/`ssh-main`'s actual mechanism found earlier**
+(`/etc/init.d/ssh start; /etc/init.d/ssh stop` — a forced stop
+immediately after every start, not a disabled/removed service), this IPMI
+toggle is doing the equivalent of manually running `/etc/init.d/ssh
+start` again after boot already force-stopped it — meaning, like the
+console method, **this is a one-boot bring-up, not a persistent fix.**
+It fully replaces the SOL/UART/JTAG console requirement from the earlier
+"one-time fix" section, though: an authenticated IPMI-over-LAN call from
+anywhere on the network is a dramatically lower bar than physical/serial
+console access, and can be scripted to run automatically right after
+every boot instead of requiring hands-on-hardware each time.
 
 ## Would a BMC firmware downgrade re-enable SSH, and would it even flash?
 
