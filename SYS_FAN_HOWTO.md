@@ -994,6 +994,63 @@ anywhere on the network is a dramatically lower bar than physical/serial
 console access, and can be scripted to run automatically right after
 every boot instead of requiring hands-on-hardware each time.
 
+### Tested on production — a second, independent validation gate blocks it (`0x86`)
+
+**Tried live on production** (`192.168.178.21`) using the exact payload
+above, `interface_name`/`secure_port` re-checked against production's own
+GET first (no assumption spare's values carried over). Result: completion
+code `0x86`, on every attempt — including a plain retry to rule out a
+transient/dynamic value.
+
+Traced via ARM disassembly of `AMISetServiceConf`
+(`libipmiamioemserviceconf.so`, production offset `0x210c`) to a distinct
+check from the `validate_active_session_count()` gate documented above.
+This one is inline in `AMISetServiceConf` itself, guarding entry to the
+same INI-section-validation loop that eventually reaches
+`Validate_SetServiceConfiguration()`:
+
+```
+r5 = IniGetUInt(dict, "ssh", "max_sessions", -1)
+tst r5, #128
+... (branch on bit 7 of r5)
+```
+
+**`r5` is read directly from production's own live parsed `ncml.conf`
+state — nothing in the 36-byte SET request touches it.** The check
+requires bit 7 of that live value to be set (i.e. the live `max_sessions`
+must be `>= 128`). This is a read of server-side state, not a validation
+of anything the client submits, so no payload exists that changes this
+outcome — it's not a "wrong byte" problem.
+
+Production's config *backup* (`/conf` extract, dated Jul 23) shows
+`max_sessions=255` for `[ssh]`, which would pass this check (bit 7 set).
+But the live gate is still rejecting with `0x86`, meaning the BMC's
+actual in-memory/live-parsed value differs from that on-disk backup —
+the same live-vs-file discrepancy already seen on spare (GET-reported
+`max_sessions` staying at `0x80` regardless of what's written, see above).
+Why production's *live* value would read differently than its own backup
+file is unresolved — could be a separate live-only override, a corrupt or
+stale in-memory cache, or the backup itself not reflecting current state.
+
+**This is a dead end for the IPMI-only approach on production as it
+currently stands.** The `current_state` toggle mechanism itself is fully
+solved and works (proven on spare); it's this unrelated, independent gate
+that's blocking entry to it specifically on production. Two ways forward,
+neither exercised yet:
+
+1. Read production's true live config value directly (needs the same
+   UART/JTAG console access set up on spare via ESP32 — not yet wired up
+   on production, pending hardware "later this week").
+2. Find a different write path that fixes the live `max_sessions` value
+   in production's running config directly, bypassing this SET command
+   entirely.
+
+Given the U-Boot findings above (`verify=n`, signature verification
+disabled at the bootloader), the offline-patched-rootfs / raw-flash route
+already in progress sidesteps this gate completely — it doesn't go
+through `AMISetServiceConf` at all, so this specific `0x86` block doesn't
+apply to it.
+
 ## Would a BMC firmware downgrade re-enable SSH, and would it even flash?
 
 If a persistent fix stays out of reach, the obvious blunt alternative is
