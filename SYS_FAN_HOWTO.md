@@ -806,13 +806,108 @@ All of this is static analysis on production's mounted 12.61.39 rootfs
 **Conclusion so far**: every boot-time or event-driven trigger mechanism
 on this firmware either lives entirely inside the signed rootfs, or (in
 cron's case) is theoretically reachable from the writable JFFS2 partition
-but doesn't actually fire for reasons still unexplained. Nothing found
-gives a writable-only path to persistent SSH that doesn't ultimately run
-into either "patch the signed rootfs" (ties back to PeterF's u-boot
-theory) or "figure out why cron is inert" (still open). If anyone finds
-another angle — a different daemon, a different config file with a
+but doesn't actually fire — and that one now has a fully identified root
+cause (`WRONG SYMLINK OWNER`, see the `strace` writeup above), not an
+open question anymore. Nothing found gives a writable-only path to
+persistent SSH that doesn't ultimately run into "patch the signed
+rootfs" (ties back to PeterF's u-boot theory). If anyone finds another
+angle — a different daemon, a different config file with a
 program-execution hook — it's worth adding to this list either way,
 confirmed or ruled out.
+
+### Who else could touch `ssh-main` or `sshd`? Management daemons, Redis, Lua, the REST API, and the `sshd` binary itself
+
+A separate pass, checking for any *indirect* control path — a
+management service that shells out to `ssh-main`, a Redis key mirroring
+service state, a Lua hook, a REST endpoint, or an actual patch to
+`sshd` itself — rather than another boot-time trigger. All checked live
+on spare.
+
+**Is `ssh-main` called from anywhere besides init?** No. A
+whole-filesystem `grep -rl "ssh-main" /` (excluding `/proc`, `/sys`,
+`/dev`) turns up nothing beyond the six static rc.d symlinks already
+known (`S16ssh` at runlevel 3 boot, `K20ssh` at runlevels 0/1/6/7/8
+shutdown/reboot). It fires exactly twice per power cycle — once at boot,
+once at shutdown — and nothing re-triggers it during uptime. No
+watchdog, no management daemon, no periodic re-assertion.
+
+**Management binaries** (`processmanager`, `IPMIMain`, `compmanager`) —
+no `strings` binary or busybox applet exists on this firmware at all, so
+binaries had to be pulled to the offline VM and analyzed with the real
+`arm-linux-gnueabi` toolchain. `processmanager`/`compmanager`: nothing
+SSH-related, just generic process-respawn bookkeeping. `IPMIMain` (the
+main IPMI daemon, confirmed as the central NetFn/cmd dispatch-table
+builder — `CoreNetfntbl`, `ExtNetFnMap`, `CMD_SELECT_NETFN_TBL`) does
+reference `CreateSSHUserDir`/`CreateSSHAuthKeyFile`, but `nm -D` shows
+both as **undefined (`U`)** symbols — not implemented in `IPMIMain`
+itself, just called from elsewhere. Its `NEEDED` list (`readelf -d`)
+points at `libuserm.so.6` (user management), and pulling that library
+confirms it: `CreateSSHUserDir`, `CreateSSHAuthKeyFile`,
+`RenameUserSSHDir`, `RestoreUsrSSHDir` sit alongside `AddNewUser`,
+`DeleteUser`, `AddUserToGroup` — this is **SSH public-key provisioning
+tied to IPMI/web-UI user account lifecycle** (create/rename/restore a
+user → also set up that user's `~/.ssh` and `authorized_keys`), not a
+service enable/disable handler. Matches the `spx_restservice` REST
+endpoint below exactly. `gbtfw` (Gigabyte's own small binary) has zero
+oem/ssh/cmd strings at all — unrelated, just the fan/sensor helper.
+
+**No second/hidden OEM command handler exists.** Beyond
+`libipmiamioemserviceconf.so`'s already-solved `AMISetServiceConf`/
+`AMIGetServiceConf` (netFn `0x32`, cmd `0x69`/`0x6a`), nothing in
+`IPMIMain` or the dozens of `libipmiamioem*.so` OEM libraries references
+an SSH service toggle. The changelog's "OEM cmd to enable/disable ssh"
+is that same command — already fully reverse-engineered above.
+
+**Redis** — `db0` holds 10,745 keys, almost entirely Redfish
+log/telemetry cache (`--scan` dumped and grepped locally rather than
+trusting `KEYS` with a wildcard pattern, which got mangled by nested
+shell-quoting across the SSH hops). Zero genuine SSH keys. The standard
+Redfish `NetworkProtocol` resource explicitly has entries for `HTTPS`,
+`SNMP`, `IPMI`, `SSDP`, `NTP`, `VirtualMedia`, `KVMIP` — and **no SSH or
+Telnet entry at all**, confirming intentional omission rather than a
+hidden toggle. One curiosity: a separate Redfish resource,
+`Managers:Self:CommandShell:ConnectTypesSupported`, lists `["IPMI",
+"SSH"]` — but this ties to a "SOL over SSH" feature
+(`CONFIG_SPX_FEATURE_SOLSSH_SUPPORT`, referenced by `spx_restservice`)
+whose actual binary, `/usr/local/bin/solssh`, **does not exist on this
+board at all** — dead/unshipped feature for this SKU, not a real path.
+
+**Lua** (`/usr/local/lib/lua`, `/usr/local/share`) — zero hits for
+`ssh`, nothing there.
+
+**`spx_restservice`** (the web-UI REST backend) — confirmed real
+endpoint `/settings/user/ssh-key-upload/([[:digit:]]+)`, backed by the
+same `libuserm.so` key-provisioning functions above. `/usr/local/www`
+hits were false positives (binary matches inside `.jar`/`.min.js`
+files) plus a few dangling symlinks (`SELLog`, `bsod`, `capture`, not
+present at scan time).
+
+**Is `sshd` itself patched by AMI?** No — pulled the binary to the VM
+and checked directly. Wire banner is stock
+(`SSH-2.0-OpenSSH_7.9p1 Debian-8`), and `readelf -d`'s `NEEDED` list is
+the exact standard OpenSSH dependency set (`libpam`, `libcrypto`,
+`libz`, `libcrypt`, `libresolv`, etc.) — no extra AMI `.so` linked into
+the binary. `strace -f` on a live restart (killed the running listener,
+traced a foreground relaunch, then `/etc/init.d/ssh start` to restore
+the normal daemonized listener — no disruption to the existing session)
+did surface one real AMI customization, just not the one that matters
+here: sshd's NSS resolution loads a custom module,
+`/lib/libnss_rsvdusers.so.2`, backed by `/etc/reservedusers` — an INI
+file defining baseline **service accounts** (`sshd` UID 520, `ntp`,
+`stunnel4`, ...) independent of the real `/conf`-backed `/etc/passwd`.
+This is a robustness mechanism (core service accounts always resolve
+even if `/etc/passwd` is corrupted/reset), unrelated to the
+`sysadmin`/`admin` lockout. `DenyUsers` itself fires later, per
+connection, via plain stock OpenSSH logic — a directive match, no
+custom code, not worth a separate trace.
+
+**Net result**: a real and thorough dig, but it closes clean rather than
+opening a bypass. The SSH enable/disable surface is exactly what's
+already documented elsewhere in this file — `ssh-main`'s boot/shutdown
+force-stop, and the IPMI OEM `AMISetServiceConf` command (plus
+production's separate `max_sessions` gate) — no second hidden path
+found in any management daemon, Redis, Lua, the REST API, or the `sshd`
+binary itself.
 
 ## The OEM `AMISetServiceConf` command — a console-free way to bring SSH up (GET confirmed, SET untested)
 
