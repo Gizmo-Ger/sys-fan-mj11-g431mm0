@@ -735,9 +735,17 @@ scans, not a symlink) offered a side door instead: also part of the
 signed rootfs, confirmed read-only (`touch` inside it: `Read-only file
 system`). Both of cron's crontab sources are structurally locked to the
 signed image. This is a genuine firmware bug (or an intentional but
-undocumented hardening choice by AMI/Gigabyte) baked into `12.61.39`,
-not a configuration mistake — and it fully explains, rather than just
-reproduces, the negative result above.
+undocumented hardening choice by AMI/Gigabyte), not a configuration
+mistake — and it fully explains, rather than just reproduces, the
+negative result above.
+
+Live-traced and confirmed on **spare, running 12.49.06** — not
+production. The identical symlink (`/etc/crontab -> /conf/crontab`,
+same UID 1025 ownership) is confirmed present on **production's
+12.61.39** mounted rootfs too via static inspection earlier in this doc,
+so the same failure almost certainly applies there as well, but this
+has only been live-verified with `strace` on spare — production hasn't
+had a console session to confirm it directly.
 
 ### Survey of every other boot/event mechanism that could fire `/etc/init.d/ssh start` from a writable location
 
