@@ -1329,6 +1329,24 @@ deliberately mismatched image and attempting to boot/flash it carries real
 bricking risk on a board with only one spare available. Left as the next step
 for whoever picks this back up, same caution PeterF applied to his own board.
 
+**Done — `bootdelay` raised to 3, confirmed persistent.** `setenv bootdelay 3`
++ `saveenv` on spare, then verified with a real `reset`: the next boot showed
+`Hit any key to stop autoboot:  3` and counted down for real, caught with a
+single normal keypress — no more spam-loop needed on this board going
+forward. A second `printenv` after the reset confirmed `bootdelay=3` survived
+the write. Full raw session logged (login → `reboot` → spam-catch the last
+zero-delay boot → `version`/`printenv`/`fmh`/`bdinfo`/`imls` recon →
+`setenv`/`saveenv` → `reset` → countdown proof → back to Linux).
+
+Two things worth noting from that session:
+- `imls` produced no output at all on this build (not an error, just silent) —
+  `fmh` remains the reliable source for module/partition info, don't rely on
+  `imls` here.
+- `boot` is not a valid command on this U-Boot build
+  (`Unknown command 'boot' - try 'help'`) — use the actual `bootcmd` value
+  instead, which on this board is `bootfmh`, to resume normal boot from the
+  shell.
+
 ## The missing web-UI SSH controls are cosmetic, not functional
 
 On the production board's web UI, **Settings → Services** (which on the
