@@ -509,7 +509,7 @@ no cramfs userspace extractor needed). Findings:
   below.** There's a way to make SSH survive reboots that never touches
   the signed rootfs at all.
 
-## A persistent fix without touching the signed firmware: `@reboot` cron (DOES NOT WORK — live-tested and failed, kept for the reasoning + the negative result)
+## A persistent fix without touching the signed firmware: `@reboot` cron (DOES NOT WORK — live-tested and failed; root cause now found via `strace`, see below)
 
 **Status: tested live on the spare board, including across a genuine BMC
 reboot, and it failed both times — see full results below. Do not use
@@ -517,9 +517,13 @@ this. The pieces it's built on are each individually real and correctly
 verified (writable crontab, correct boot ordering, genuine `@reboot`
 gating logic in the cron binary), but something prevents cron from
 actually dispatching *any* job on this firmware, including its own
-stock jobs. Root cause unknown.** Left the reasoning and the test writeup
-in place since the individual facts are still accurate and useful context
-for whoever eventually root-causes this — just not as a working fix.
+stock jobs.** For a long time this was "root cause unknown" — **it no
+longer is, see the "Root cause found via `strace`" subsection below the
+test writeup.** Short version: cron refuses to trust `/etc/crontab`
+because the symlink itself isn't root-owned, and that ownership is baked
+into the signed rootfs — genuinely unfixable from `/conf` alone. Left the
+full reasoning and the test writeup in place since the individual facts
+are still accurate and useful context — just not as a working fix.
 
 The `/etc/init.d/ssh start` trick above gets SSH working immediately, but
 only until the next reboot, because the boot-time kill lives in the
@@ -671,6 +675,69 @@ only empirically working method in this document. Both live tests were
 performed on the spare board only, with `/conf/crontab` backed up before
 each attempt and byte-for-byte restored (hash-verified) afterward —
 production was never touched by any of this.
+
+### Root cause found via `strace`: `WRONG SYMLINK OWNER` — cron never even reads `/conf/crontab`
+
+No `strace` binary or busybox applet exists on this firmware, so one had
+to be sideloaded. Built statically from official source
+(`strace` 6.16, since 6.10 choked on a `struct mnt_id_req` mismatch
+against this toolchain's newer kernel headers) using the VM's
+`arm-linux-gnueabi-gcc` cross-compiler (`apt install
+gcc-arm-linux-gnueabi libc6-dev-armel-cross`), `LDFLAGS=-static`, with two
+small source patches (`listmount.c`, `statmount.c`) to drop a `spare`
+struct field strace's bundled code expected but this kernel-headers
+version doesn't have — unrelated to anything being traced, just build
+plumbing. Confirmed fully static (`readelf -d`: no dynamic section) and
+copied to spare over its own working SSH (`/tmp/strace`, since neither
+`scp` nor `sftp` exist as server-side subsystems on this board — plain
+`ssh ... 'cat > /tmp/strace'` piping the raw binary works fine, the exec
+channel is 8-bit clean).
+
+No real reboot needed: killed the running `cron`, removed
+`/var/run/crond.reboot` (the same "run once per boot" marker documented
+above), and relaunched `/usr/sbin/cron` directly under `strace -f -tt`.
+Since `cron` daemonizes via its own internal double-fork, `strace -f`
+follows across it fine and the daemon ends up running normally afterward
+(confirmed alive, correctly re-parented to `init`, healthy pidfile) —
+tracing didn't disturb anything. The kernel here (3.14.17, `armv6l`) is
+old enough to predate Yama's `ptrace_scope` restriction entirely, so no
+special privilege dance was needed to attach.
+
+The trace answers it in one line, right after `cron` starts up its
+timer loop:
+
+```
+lstat64("/etc/crontab", {st_mode=S_IFLNK|0777, st_size=13, ...}) = 0
+...
+send(4, "<78>... cron[10783]: (*system*) WRONG SYMLINK OWNER (/etc/crontab)", ...)
+```
+
+**This is vixie-cron's own security hardening**: before trusting the
+system crontab, it `lstat()`s `/etc/crontab`, and if the path resolves
+through a symlink, it refuses to load it unless that symlink is owned by
+root. `/etc/crontab -> /conf/crontab` on this board is owned by UID 1025
+(`bin`), not root — confirmed earlier in this doc. The moment cron sees
+that mismatch, it logs the warning and **moves on without ever opening
+`/conf/crontab` at all** — there is no `open()`/`stat()` on
+`/conf/crontab`'s actual path anywhere in the trace. It still logs the
+generic `"(CRON) INFO (Running @reboot jobs)"` startup line regardless
+(which is what made this look like a dispatch bug rather than a load
+failure), then just idles in its normal sleep loop forever — confirmed
+across two real minute boundaries in the trace with zero `clone()`/
+`execve()` calls, matching the total dispatch failure (not just
+`@reboot`) observed in the live tests above.
+
+**Why this can't be fixed from `/conf` alone**: the symlink's ownership
+is a property of the signed rootfs itself (cramfs, read-only) — there is
+no `chown` that survives a reboot, and no way to replace the symlink at
+runtime either. Checked whether `/etc/cron.d` (a real directory cron also
+scans, not a symlink) offered a side door instead: also part of the
+signed rootfs, confirmed read-only (`touch` inside it: `Read-only file
+system`). Both of cron's crontab sources are structurally locked to the
+signed image. This is a genuine firmware bug (or an intentional but
+undocumented hardening choice by AMI/Gigabyte) baked into `12.61.39`,
+not a configuration mistake — and it fully explains, rather than just
+reproduces, the negative result above.
 
 ### Survey of every other boot/event mechanism that could fire `/etc/init.d/ssh start` from a writable location
 
