@@ -1707,3 +1707,178 @@ earlier — the ETag precondition passed and the handler evaluated the request
 for real, then rejected it only because `true` was already the current value.
 That's full end-to-end confirmation the backend is a live, functional
 resource, not a UI stub sitting in front of something removed.
+
+## Logging into SOLSSH-recovered production `sshd`: password path isolated, SSH-key sideload traced end-to-end and ruled out
+
+With production's `sshd` reachable via the SOLSSH bypass (above), the
+remaining problem was actually authenticating — both the pre-existing
+`admin` IPMI account (`admin`/`password`, the web UI login) and a freshly
+created `test` account failed SSH password auth with a generic PAM
+"Permission denied", while `ipmitool user list` confirmed both had
+`ADMINISTRATOR` privilege and, after enabling it via the web UI's Channel
+Access checkboxes, `IPMI Msg: true` (the account-level gate mirrored by
+`GetUsrLANChPriv` inside `pam_ipmi.so`, decompiled previously).
+
+### Isolating whether `pam_ipmi`'s password path is broken in general, or production-specific
+
+Rather than keep guessing blind against production, the same account type
+was tested directly on spare over a real network SSH connection (not the
+UART bridge) with generous auth timeouts, since a naive short client
+timeout can misreport a slow success as a failure:
+
+- **Spare, `admin`/`password`**: login **succeeds** after ~9.1s (slow —
+  matches a real `pam_ipmi` local-session/pipe round trip), landing in a
+  restricted `SMASHLITE Scorpio Console` (AMI's own SMASH-CLP menu, not
+  `/bin/sh` — expected, since `defshell` hands IPMI-backed accounts a
+  different `default_sh` than `sysadmin` gets).
+- **Production, `admin`/`password`**: genuine `AuthenticationException` at
+  6.1s — not a hang, not a client-timeout artifact.
+- **Production, `test`/`Tiu89#,md4`**: same, `AuthenticationException` at
+  4.3s.
+
+This proves `pam_ipmi`'s password-verification mechanism is **not**
+broadly broken on this firmware family — it works (slowly) on spare
+(12.49.06) and is being genuinely, quickly rejected specifically on
+production (12.61.39). One confound worth naming: spare's `sshd` has run
+continuously since a normal boot, while production's only exists because
+SOLSSH force-restarted it out-of-band; if some sibling daemon `pam_ipmi`
+talks to over `/var/pipe/usr_act_verify_req` is only (re)initialized on a
+normal boot-time `ssh start`, that alone could produce this exact
+symptom without the credential path itself being broken. Not yet
+distinguished from a genuine firmware-version regression in `pam_ipmi`
+or its peer daemon.
+
+### Sidestepping the password path entirely: sideloading an SSH public key for `test`
+
+Since PAM's PubkeyAuthentication doesn't route through `pam_ipmi`'s
+password-verification code path at all, the obvious next move was
+provisioning a real `authorized_keys` file for the `test` account instead
+of fighting the password path. `AuthorizedKeysFile` in
+`/conf/ssh_server_config` is `/conf/user_home/%u/.ssh/authorized_keys`,
+and `libuserm.so`'s `CreateSSHUserDir`/`CreateSSHAuthKeyFile` (previously
+found only via `nm`) already pointed at exactly that convention.
+
+**Finding the real upload path.** The web UI shows no SSH-key upload
+control for this account (only an SSL/TLS certificate section), but
+`spx_restservice`'s strings confirmed a live, unused REST route:
+`/settings/user/ssh-key-upload/([[:digit:]]+)`. A first attempt (POST
+with a valid web-UI session cookie + `X-CSRFTOKEN`) against that literal
+path returned an HTTP 200 that was actually `lighttpd`'s gzip-compressed
+SPA fallback (`index.html`) — the real API prefix, per
+`/etc/defconfig/lighttpd.conf`'s `mod_fastcgi` block, is `/api`, proxying
+to `spx_restservice` over `/tmp/spx_restservice.socket`:
+
+```
+fastcgi.server += ("/api" => (( "bin-path" => "/usr/local/bin/spx_restservice",
+                                 "socket"   => "/tmp/spx_restservice.socket", ... )))
+```
+
+Against the correct path, `/api/settings/user/ssh-key-upload/<id>`, a
+multipart POST (`upload_ssh_key` field, matching the
+`upload_ssh_key.length`/`.savepath` strings) returned `{"cc": 0}` — a real
+success from the actual handler, confirmed via decompile of
+`sshKeyUpload_func` in `spx_restservice`:
+
+```c
+// sshKeyUpload_func (settings_users.c) — abbreviated
+pcVar2 = (char *)qcgireq_getvalue(iVar3, "upload_ssh_key.savepath", 0);
+snprintf(tmpname, 0x18, "%s.%ld", "/tmp/authorized_keys", mapped_uid);
+rename(pcVar2, tmpname);   // stage only — nothing else happens in this handler
+```
+
+**The commit step lives in `modifyUser_func`, not the upload handler.**
+`find_callers` on `uploadSSHKey` inside `spx_restservice.bin` confirmed
+its only caller is `modifyUser_func` — i.e. the staged file in
+`/tmp/authorized_keys.<id>` is only adopted when the user record itself is
+subsequently saved. Decompiled the two helper functions:
+
+```c
+// validateSSHKey(uid) — settings_users.c
+snprintf(path, 0x18, "%s.%i", "/tmp/authorized_keys", uid);
+if (stat(path, &st) != 0) return 1;                 // "SSH Key file %s not exists"
+if (st.st_size - 1U >= 0x2000) return 5;             // > 8KB, reject
+if (fopen(path, "r") == NULL) return 8;              // unreadable, retry
+return 0;
+
+// uploadSSHKey(username, uid) — settings_users.c
+sprintf(userdir, "%s/%s/", "/conf/user_home/", username);
+snprintf(tmpname, 0x18, "%s.%i", "/tmp/authorized_keys", uid);
+snprintf(sshdir, ..., "%s%s", userdir, ".ssh");
+snprintf(keyfile, ..., "%s/%s", sshdir, "authorized_keys");
+if (fopen(keyfile, "r") == NULL && errno == ENOENT) mkdir(sshdir, 0744);
+copyFile(tmpname, keyfile);
+unlink(tmpname);
+chmod(keyfile, 0744);
+```
+
+A plain "Save" on the `test` user's edit page (no field changes) should
+reach this code on every successful `PUT` to `modifyUser_func` — this was
+tried and the subsequent SSH key login still failed. Suspecting the
+account itself might be missing scaffolding, `test` was deleted and
+recreated via the web UI's own **Add User** button (rather than raw
+`ipmitool user set`, which only issues low-level IPMI Set User
+Name/Password/Access commands and never touches `IPMIMain`'s own
+`AddNewUser` OEM handler). Confirmed via `find_callers` on
+`CreateSSHAuthKeyFile` inside `IPMIMain` that the real directory/file
+scaffolding (`CreateSSHUserDir`/`CreateSSHAuthKeyFile`, called from
+`CheckForUsersHomeDirectory`) only ever runs from `InitPMConfig` — i.e.
+**once, at `IPMIMain` process startup**, iterating IPMI user IDs 2–10 and
+creating any missing `/conf/user_home/<user>/.ssh/authorized_keys` for
+accounts with IPMI messaging enabled. Re-uploaded the key against the
+recreated account (fresh session cookie/CSRF token — recreating the
+account invalidated the old one) and saved again. **SSH key login still
+failed identically.**
+
+### Conclusive negative result: pubkey auth doesn't work for IPMI/NSS accounts on this `sshd`, period
+
+Rather than keep tracing production blind, the same setup was reproduced
+under full control on spare, which has real shell access. Spare's
+`admin`'s `/conf/user_home/admin/.ssh/authorized_keys` was confirmed
+pre-existing, empty, and owned by `sysadmin` — which is UID 0 (`sysadmin:x:0:0:...`
+in `/etc/passwd`) — so root-owned, satisfying `StrictModes yes` regardless
+of the target account's own UID. The generated test key was written
+directly into that file by hand (correct path, correct root ownership,
+correct 0644-class permissions, content verified present), and login was
+attempted as `admin`:
+
+```
+$ ssh -i test_key admin@<spare-ip> id
+debug1: Offering public key: ... ED25519 ... explicit
+debug2: we sent a publickey packet, wait for reply
+debug1: Authentications that can continue: publickey,password
+admin@<spare-ip>: Permission denied (publickey,password).
+```
+
+Identical rejection, at the identical point in the handshake, as on
+production — despite every provisioning variable now being verified
+correct and despite `admin`/password succeeding on this exact same board
+and account only moments earlier. Since password auth for the same
+account on the same box works, this isn't PAM's shared account-phase
+rejecting the login after auth — the pubkey signature/file-match step
+itself is failing, before PAM's account phase is even reached. The
+likely mechanism: OpenSSH's privilege-separated child validates the key
+file's ownership/path as the *target* user, and `getent passwd admin`
+reports a synthetic home directory of literally `/home` (not
+`/home/admin` or anything account-specific) — a generic, shared system
+path unrelated to where `AuthorizedKeysFile`'s absolute
+`%u`-substituted path actually lives. Something in that mismatch between
+the NSS-reported home and the real, absolute `AuthorizedKeysFile` target
+appears to break pubkey auth structurally for every IPMI/NSS-backed
+account on this `sshd` build, independent of firmware version.
+
+**Net effect**: the REST upload → stage → validate → copy pipeline is
+fully traced, real, and working exactly as designed — but SSH public-key
+authentication is a dead end on this firmware family regardless, so it
+cannot be used to route around the password-auth problem. The only
+remaining live lever for logging into production's SOLSSH-recovered
+`sshd` is still `pam_ipmi`'s password-verification path itself
+(`LIBIPMI_Create_IPMI_Local_Session` → `GetReqUserInfo` →
+`/var/pipe/usr_act_verify_req`/`_res`), which the isolation test above
+confirms works on spare and fails specifically on production — not yet
+traced to completion, and not resolvable further without either shell
+access on production or a lot more decompile work on the pipe protocol
+and its counterpart daemon.
+
+(The test key written into spare's `admin` `authorized_keys` during this
+investigation was reverted to empty afterward — no lasting change to
+spare.)
