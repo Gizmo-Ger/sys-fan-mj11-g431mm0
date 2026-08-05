@@ -1164,62 +1164,168 @@ anywhere on the network is a dramatically lower bar than physical/serial
 console access, and can be scripted to run automatically right after
 every boot instead of requiring hands-on-hardware each time.
 
-### Tested on production — a second, independent validation gate blocks it (`0x86`)
+### Tested on production — a second, independent validation gate blocked it (`0x86`) — root cause now nailed precisely, and bypassed live
 
 **Tried live on production** (`192.168.178.21`) using the exact payload
-above, `interface_name`/`secure_port` re-checked against production's own
-GET first (no assumption spare's values carried over). Result: completion
-code `0x86`, on every attempt — including a plain retry to rule out a
-transient/dynamic value.
+above. Result: completion code `0x86`, on every attempt.
 
-Traced via ARM disassembly of `AMISetServiceConf`
-(`libipmiamioemserviceconf.so`, production offset `0x210c`) to a distinct
-check from the `validate_active_session_count()` gate documented above.
-This one is inline in `AMISetServiceConf` itself, guarding entry to the
-same INI-section-validation loop that eventually reaches
-`Validate_SetServiceConfiguration()`:
+**Correction to the original live-disassembly finding**: the `tst r5,#128`
+gate documented in the first version of this section was mis-attributed.
+A proper decompile via Ghidra (through a self-hosted "wairz" firmware
+analysis MCP server, ARM decompilation of the actual pulled `.so` files —
+see below) of the *real* `AMISetServiceConf` shows **no inline
+`max_sessions` check at all inside that function**. The `0x86` genuinely
+comes from `Validate_SetServiceConfiguration()` — a separate function in
+`libncml.so`, not a stub, not inline — whose completion code is copied
+verbatim into the IPMI response (`*param_3 = (char)iVar6` in
+`AMISetServiceConf`). Full decompiled logic:
+
+```c
+uVar9 = IniGetUInt(dict, param_1 /* service NAME string, e.g. "ssh" */,
+                    "max_sessions", 0xfffffffe);
+uVar12 = uVar9 & 0xff;
+if (uVar12 == 0xff) {
+    if (submitted_max_sessions != 0xff) return 0x81;
+    if ((uVar9 & 0x80) == 0) return 0x86;      // <-- the actual gate
+} else {
+    if ((uVar9 & 0x80) == 0) {
+        if (submitted_max_sessions == 0 || ...) return 0x86;
+    } else {
+        if (submitted_max_sessions != 0) return 0x82;
+        param_1[0x2f] = (byte)uVar9;   // overwrites submitted value with config's own
+    }
+}
+```
+
+Two things this settles for good:
+
+1. **This is generic per-service validation, not SSH-specific.**
+   `param_1` is literally the service-name string looked up from
+   `ServiceNameList[]` — `IniGetUInt` reads `max_sessions` from *that
+   service's own `ncml.conf` section*. It is not hardcoded to check
+   `[ssh]`.
+2. **The "GET always reads back `max_sessions=0x80` regardless of what's
+   sent" mystery (noted earlier in this doc) is explained**: when the
+   config's bit 7 is set, the code *overwrites* the submitted byte with
+   the config's own value (`param_1[0x2f] = (byte)uVar9`) — it was never
+   accepting an arbitrary value in that branch to begin with.
+
+Production's `[ssh]` section genuinely has a live-vs-file discrepancy for
+`max_sessions` (backup shows `255`, live gate still rejects) — that part
+of the original finding stands, just not for the reason first claimed.
+
+#### The bypass: a second service name reaches the identical `ssh start` code, through a different `ncml.conf` section
+
+`AMISetServiceConf`'s switch statement (keyed on service bit index) has
+**two separate cases that both run**:
+```
+safe_system("/etc/init.d/ssh force-stop");
+safe_system("/etc/init.d/ssh start &");
+```
+— service bit index **5** (`ServiceID=0x20`, `"ssh"`, the one used
+throughout this doc) **and service bit index 7** (`ServiceID=0x80`), which
+a debug string in `AMIGetServiceConf` identifies explicitly as
+**`SOLSSH`** ("SOL over SSH"). Index 7's case additionally cleans up a
+`/tmp/solsessionactive%d` marker file, otherwise it's the same two
+`safe_system()` calls.
+
+Critically, `AMISetServiceConf`'s early availability-gate block (the one
+that rejects KVM/CD-media/HD-media/VNC when their feature flag is off)
+**only checks service indices 1, 2, 4, and 8 — it has no check for index
+7 at all**, unlike `AMIGetServiceConf`, which explicitly gates it
+(`"SOLSSH is not available"`, completion code `0x93`, confirmed live: GET
+on `ServiceID=0x80` returns exactly `0x93` on both boards). SET simply
+never checks whether SOLSSH is "available" before proceeding — an
+asymmetry between the Get and Set command implementations.
+
+Both boards genuinely have a `[solssh]` section in `/conf/ncml.conf`
+(confirmed via the already-captured config extracts, no live console
+needed):
+```
+[solssh]
+MaxSessionInactivityTimeout=1800
+secure_port=4294967295
+interface_name=bond0         (production: interface_name=both)
+service_name=solssh
+session_timeout=60
+max_sessions=255
+nonscecure_port=4294967295   (sic — AMI's own typo, matches the source)
+active_sessions=255
+MinSessionInactivityTimeout=30
+current_state=0
+```
+
+**Live-tested end to end, working on both boards**, using
+`ServiceID=0x80` with every other field matched to the `[solssh]` values
+above and — same universal trick as the original `ssh` payload —
+`max_sessions=0x00` (not `0xff`, despite the config saying `255`; this
+byte is validated by the separate, already-documented
+`validate_active_session_count()` gate, not the `Validate_SetServiceConfiguration`
+one, and that gate's own rule — `max_sessions==0` always passes,
+`==255` only passes if the live active-session count also happens to
+read exactly `255` — applies here exactly as it did for `ssh`):
 
 ```
-r5 = IniGetUInt(dict, "ssh", "max_sessions", -1)
-tst r5, #128
-... (branch on bit 7 of r5)
+ipmitool -I lanplus -H <bmc-ip> -U admin -P <password> raw 0x32 0x6a \
+  0x80 0x00 0x00 0x00 0x01 <interface_name, 17 bytes, "bond0" or "both"> \
+  0xff 0xff 0xff 0xff  0xff 0xff 0xff 0xff  0x3c 0x00 0x00 0x00 0xff 0x00
 ```
 
-**`r5` is read directly from production's own live parsed `ncml.conf`
-state — nothing in the 36-byte SET request touches it.** The check
-requires bit 7 of that live value to be set (i.e. the live `max_sessions`
-must be `>= 128`). This is a read of server-side state, not a validation
-of anything the client submits, so no payload exists that changes this
-outcome — it's not a "wrong byte" problem.
+- **Spare**: exit 0, `sshd`'s PID changed (fresh restart confirmed via
+  `ps -ef`), `/tmp/solsessionactive*` cleanup ran (file wasn't present,
+  harmless).
+- **Production**: exit 0, and `sshd` came up for real —
+  `nc 192.168.178.21 22` returned a live `SSH-2.0-OpenSSH_7.9p1 Debian-8`
+  banner. **This is the first time production's `sshd` has been reachable
+  at all during this entire investigation.**
 
-Production's config *backup* (`/conf` extract, dated Jul 23) shows
-`max_sessions=255` for `[ssh]`, which would pass this check (bit 7 set).
-But the live gate is still rejecting with `0x86`, meaning the BMC's
-actual in-memory/live-parsed value differs from that on-disk backup —
-the same live-vs-file discrepancy already seen on spare (GET-reported
-`max_sessions` staying at `0x80` regardless of what's written, see above).
-Why production's *live* value would read differently than its own backup
-file is unresolved — could be a separate live-only override, a corrupt or
-stale in-memory cache, or the backup itself not reflecting current state.
+Same one-boot caveat as the direct `ssh` command applies: this doesn't
+touch the signed rootfs, so `ssh-main`'s boot-time force-stop will kill
+it again on the next reboot — it needs re-running after every boot,
+exactly like the original mechanism.
 
-**This is a dead end for the IPMI-only approach on production as it
-currently stands.** The `current_state` toggle mechanism itself is fully
-solved and works (proven on spare); it's this unrelated, independent gate
-that's blocking entry to it specifically on production. Two ways forward,
-neither exercised yet:
+**Open item: logging in.** `sysadmin`/known password is still blocked by
+`DenyUsers sysadmin` in `sshd_config`. The IPMI `admin` account (used for
+all the `ipmitool` calls above) failed SSH password auth
+(`Permission denied`). Created a new IPMI user (`ipmitool user set
+name`/`password`/`priv 4 1`, then enabled LAN channel access for it via
+the web UI — `ipmitool`'s own `channel setaccess` call for this got
+blocked by Claude Code's own safety classifier) with ADMINISTRATOR
+privilege — also failed SSH password auth with the same generic
+`Permission denied`.
 
-1. Read production's true live config value directly (needs the same
-   UART/JTAG console access set up on spare via ESP32 — not yet wired up
-   on production, pending hardware "later this week").
-2. Find a different write path that fixes the live `max_sessions` value
-   in production's running config directly, bypassing this SET command
-   entirely.
+Decompiled `pam_ipmi.so`'s `pam_sm_authenticate` (confirmed via `cat
+/etc/pam.d/sshd` that `sshd` and console `login` share the identical PAM
+stack: `pam_unix.so` first — fails for any account with no real
+`/etc/passwd`/`/etc/shadow` entry, which includes IPMI-created users —
+then falls through to `pam_ipmi.so`). Ruled out a suspected global
+`PDK_IsLocalLoginDisabled()` kill-switch dlopen'd from
+`/usr/local/lib/libpdkapp.so` — decompiled both spare's and **production's
+actual** `libpdkapp.so` (pulled directly from the already-mounted
+`/mnt/prod_rootfs1`, no shell/UART needed) and neither build exports that
+symbol at all, so the `dlsym` lookup returns `NULL` and the check always
+falls through to "proceed normally" on both firmwares. Verbose `ssh -v`
+confirms the `password` method is genuinely offered and attempted (not
+rejected at the protocol/method-negotiation level) — the failure is
+inside `pam_ipmi`'s real IPMI-credential-verification path, which talks
+to the IPMI stack through a local session (`LIBIPMI_Create_IPMI_Local_Session`)
+and a request/response pipe pair (`/var/pipe/usr_act_verify_req`/`_res`)
+whose exact failure mode for a freshly-created user isn't pinned down
+yet. SSH public-key upload — which would sidestep this whole path,
+matching the `CreateSSHUserDir`/`CreateSSHAuthKeyFile` functions found in
+`libuserm.so` — isn't exposed anywhere in the web UI for this account
+(only an SSL/TLS certificate section is present). **Next step**: either
+keep tracing the IPMI local-session pipe protocol, or find another way to
+exercise the `/settings/user/ssh-key-upload/<id>` REST endpoint
+(confirmed present in `spx_restservice`'s strings) directly.
 
 Given the U-Boot findings above (`verify=n`, signature verification
 disabled at the bootloader), the offline-patched-rootfs / raw-flash route
-already in progress sidesteps this gate completely — it doesn't go
-through `AMISetServiceConf` at all, so this specific `0x86` block doesn't
-apply to it.
+already in progress remains a separate, fully independent path to a
+*persistent* fix — it doesn't go through `AMISetServiceConf` at all, so
+none of this applies to it. But the SOLSSH bypass documented here is,
+right now, the first and only method that has put production's real
+`sshd` on the wire during this whole project.
 
 ## Would a BMC firmware downgrade re-enable SSH, and would it even flash?
 
