@@ -1882,3 +1882,161 @@ and its counterpart daemon.
 (The test key written into spare's `admin` `authorized_keys` during this
 investigation was reverted to empty afterward — no lasting change to
 spare.)
+
+## Password auth on production, solved: it was an account lockout, not a firmware-version credential bug
+
+The `pam_ipmi` isolation test above (spare succeeds slowly, production
+fails fast) turned out to point at the wrong layer. Re-reading
+`pam_sm_authenticate`'s actual control flow correctly: the
+`/var/pipe/usr_act_verify_req`/`_res` protocol only runs *after*
+`GetReqUserInfo` already returns success (`0`) or bad-password (`0x80`).
+Any other error code skips the pipe entirely and rejects immediately —
+which matches production's fast (4-6s) failures far better than a full
+pipe round-trip would. So the real suspect was `GetReqUserInfo`'s own
+credential check, not the pipe daemon.
+
+Tracing the real call chain (`pam_ipmi.so` → `GetReqUserInfo` in
+`libuserauth.so` → `LIBIPMI_GetUserIDForUserName` in `libipmi.so`) hit a
+string of self-referential 12-byte decompile stubs — the same PLT/thunk
+ambiguity artifact seen earlier this project with `AMISetServiceConf`.
+Rather than keep chasing thunks, went one level up the actual call graph
+instead: `IPMIMain`'s own function list includes an imported
+`PasswordVerificationTask`, real implementation in
+`libipmimsghndlr.so`, source file literally named `Transport/Badpasswd.c`:
+
+```c
+// PasswordVerificationTask (Transport/Badpasswd.c) — abbreviated
+sigwrap_read(req_pipe, request, 0x28);          // {username, ip, GetReqUserInfo's result byte}
+...
+iVar5 = FindUserLockStatus(userid, channel, session);
+if (iVar5 != 0) {
+    // "PasswordVerificationTask: User is Locked"
+    reply = 1;                                   // -> pam_ipmi treats this as a hard reject
+} else {
+    if (submitted_result_byte == 0x80) {          // this attempt's password was wrong
+        // "Failed password attempt, User shall be locked after Bad Password Threshold value if configured"
+        LockUser(userid, channel, session);
+    }
+    reply = 0;
+}
+sigwrap_write(res_pipe, &reply, 4);
+```
+
+This is a genuine bad-password lockout tracker, separate from (and
+downstream of) the actual credential check. Confirmed against production's
+own login audit log (`Configuration → Security` style login-history page):
+three `sshd Login Failed` entries for `test` clustered within 18 minutes
+on 2026-08-05 (10:55–11:13), then every subsequent attempt — regardless of
+which password was submitted, hours or days later — kept failing
+identically. That's "locked until manually cleared," not a timed window:
+all the trial-and-error curl/SSH testing earlier in this same
+investigation tripped the Bad Password Threshold and never recovered on
+its own.
+
+**No lockout indicator or reset control exists anywhere in the web UI**
+(checked the login-audit page, the per-user edit page, and the security
+settings pages). What did work: **deleting and recreating the account**.
+`FindUserLockStatus`'s backing counter is evidently keyed to the account's
+internal creation instance, not just the username — a fresh `test`
+account (same name, same numeric IPMI user ID 3) came up unlocked and
+authenticated successfully:
+
+```
+$ ssh test@<production-ip>
+# password: test3000
+LOGIN OK after 2.6s
+```
+
+Ruled out an alternative theory (a leaked/wedged local-IPMI-session queue
+from all the repeated testing) by issuing a real BMC-only warm reset
+(`ipmitool mc reset warm`, host power untouched) between two otherwise
+identical tests — the shell-hang problem below persisted unchanged across
+the reset, and the lockout stayed cleared, so the fix is specifically the
+account-recreation step, not anything reset-shaped.
+
+## A second, independent problem sits right behind the first: no working interactive shell
+
+Password auth succeeding doesn't mean a shell shows up. Every successful
+login against production's SOLSSH-recovered `sshd` — regardless of
+account — either gets rejected outright with a real error, or authenticates
+and then hangs forever with zero output (no banner, no prompt, exit
+status never set, channel stays open indefinitely). Systematically swept
+every IPMI privilege level for the `test` account (channel access set via
+the web UI's own privilege dropdown, `User / Administrator / Operator /
+None / Callback / OEM`) to map out which is which:
+
+| Privilege (both channels) | Result |
+| --- | --- |
+| User | Explicit reject: `[solssh.c:285]test Not have Access` |
+| Callback | Explicit reject: `[solssh.c:291]test Not have Access` (different check, same message) |
+| Operator | Silent hang — auth succeeds, zero shell output, never exits |
+| Administrator | Silent hang — identical to Operator |
+| OEM | Silent hang — identical to Operator/Administrator |
+
+Two independent gates, stacked:
+
+1. **`solssh.c`'s own access check runs first**, before shell selection is
+   even reached, and outright rejects `User`/`Callback`-level channel
+   access. This is specific to the SOLSSH code path itself (the `ServiceID=0x80`
+   bypass documented above) — it is not the generic SSH privilege model.
+2. **Whatever clears that gate (Operator/Administrator/OEM) then hits an
+   identical, silent hang**, regardless of which of the three it is.
+   Recreating the `test` account with **Operator** selected at creation
+   time (not just Operator set afterward via channel access) produced the
+   exact same hang — ruling out "wrong role selected in the Add User
+   wizard" as the cause.
+
+Traced the hang to `GetReqUserInfo`'s shell-selection step:
+`LIBIPMI_HL_AMIGetUserShelltype(session, userid, &shelltype, timeout)`
+reads a stored per-user byte (confirmed via direct ARM disassembly of
+`AMIGetUserShelltype` in `libipmimsghndlr.so`, since wairz was
+disconnected at the time — it's a straight `getUserIdInfo(uid)->byte[0x2a]`
+read, no logic beyond that), then `GetPrefShell_String(shelltype)` is
+supposed to turn that byte into an actual shell path. Decompiling
+`GetPrefShell_String` (in `libuserauth.so`) showed only two valid,
+hardcoded branches (byte values `0` and `1`, each pointing at a literal
+string baked into the binary) — any other value causes the function to
+return without writing anything to the output buffer, and
+`GetReqUserInfo` then aborts without ever assigning a shell path at all.
+That fits the observed hang exactly. **This decompile result carries a
+caveat, flagged plainly rather than glossed over**: the resolved string
+addresses (`SUB_0002711c` and friends) fall outside this library's actual
+mapped address range entirely (file tops out around `0x161ac`; the
+resolved address was `0x2711c`), and Ghidra's own output flagged a
+symbol-table collision warning on this exact function — so the *shape* of
+the bug (two-value table, silent failure otherwise) is trusted, but the
+literal string contents were not independently confirmed.
+
+Checked whether `test`'s stored shelltype byte could be forced directly:
+`libipmimsghndlr.so` exports a sibling `AMISetUserShelltype`, but it has
+**zero callers anywhere in production's userspace binaries** — not a
+relocation reference, not even a bare `dlsym`-style string literal
+anywhere under `/usr/local`. It's dead code on this firmware, same
+"advertised but unused" pattern already documented for the `solssh`
+binary and `SMASHLITE` itself (see below) — there is no IPMI-level lever
+to change this byte after the fact.
+
+The likely underlying cause, tying back to earlier findings in this doc:
+spare's `admin` (older firmware, 12.49.06) drops into a real `SMASHLITE
+Scorpio Console` on shelltype resolution. **`smash`/SMASHLITE does not
+exist anywhere on production's rootfs** (12.61.39) — confirmed by `find`
+across the full extracted signed rootfs, nothing named `*smash*`
+anywhere. This is the same firmware-hardening pass that stopped `sshd`
+at boot and removed the `solssh` binary (`ssh-main`'s `start; stop`
+sequence, documented earlier in this file). Production's privileged
+accounts almost certainly still carry whatever shelltype value used to
+mean "give me SMASHLITE," and with the binary gone and no fallback in
+`GetPrefShell_String` for that value, the login just hangs forever
+instead of falling back to plain `/bin/sh`.
+
+**Net effect**: SSH password authentication to production is fully
+solved and reproducible (`test`/`test3000`, survives a real BMC reset).
+Getting an actual interactive shell on top of it via the SOLSSH bypass
+looks structurally blocked on this firmware version — every privilege
+level either gets rejected by `solssh.c` before shell selection, or hits
+the same dead shelltype with no working fallback. Confirming the exact
+byte value, or fixing it, needs either a real shell on production (the
+thing missing) or defeating the signed rootfs to reinstate a working
+`smash` binary or patch `GetPrefShell_String`'s fallback — both out of
+scope for the live, non-destructive approach this project has used so
+far.
