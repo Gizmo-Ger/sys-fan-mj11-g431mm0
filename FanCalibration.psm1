@@ -139,10 +139,17 @@ function Invoke-FanSweep {
 
     $fanProfile = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/settings/fanprofile' -Method 'Get'
     $originalMode = $fanProfile.strMode
+
+    if ($originalMode -eq 'calibration') {
+        throw "BMC steht noch auf 'calibration' (vorheriger Lauf abgebrochen). Bitte erst manuell auf 'quiet'/'default' zurueckschalten."
+    }
+
+    if (-not ($fanProfile.arrProfile | Where-Object { $_.strName -eq 'calibration' })) {
+        throw "Profil 'calibration' existiert nicht auf dem BMC. Einmalig anlegen: POST /api/settings/fanprofile/collection mit Body {`"strName`":`"calibration`",...}"
+    }
+
     $cpuTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 184
     $systemTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 185
-
-    $rows = @()
 
     try {
         foreach ($zone in $zones) {
@@ -163,20 +170,38 @@ function Invoke-FanSweep {
 
                 $sensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
 
+                $rpmBySensor = @{}
+                $missingSensorNumbers = @()
                 foreach ($sensorNumber in $zone.FanSensorNumbers) {
                     $rpm = Get-FanRpm -Sensors $sensors -SensorNumber $sensorNumber
-                    $rows += New-CalibrationCsvRow -Zone $zone.Name -DutyPercent $duty `
-                        -FanName $fanNames[$sensorNumber] -Rpm $rpm
+                    $rpmBySensor[$sensorNumber] = $rpm
+                    if ($null -eq $rpm) { $missingSensorNumbers += $sensorNumber }
+                }
+
+                if ($missingSensorNumbers.Count -gt 0) {
+                    & $SleepCommand 3
+                    $retrySensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
+                    foreach ($sensorNumber in $missingSensorNumbers) {
+                        $rpmBySensor[$sensorNumber] = Get-FanRpm -Sensors $retrySensors -SensorNumber $sensorNumber
+                    }
+                }
+
+                foreach ($sensorNumber in $zone.FanSensorNumbers) {
+                    New-CalibrationCsvRow -Zone $zone.Name -DutyPercent $duty `
+                        -FanName $fanNames[$sensorNumber] -Rpm $rpmBySensor[$sensorNumber]
                 }
             }
         }
     }
     finally {
-        Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
-            -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = $originalMode } | Out-Null
+        try {
+            Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
+                -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = $originalMode } | Out-Null
+        }
+        catch {
+            Write-Warning "ACHTUNG: Modus konnte nicht auf '$originalMode' zurueckgesetzt werden - BMC laeuft weiter auf 'calibration'! Manuell zuruecksetzen. ($_)"
+        }
     }
-
-    return $rows
 }
 
 Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep

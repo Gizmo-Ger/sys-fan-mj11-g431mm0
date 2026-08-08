@@ -132,8 +132,6 @@ Describe 'New-CalibrationCsvRow' {
 Describe 'Connect-Bmc' {
     It 'posts credentials and returns the session plus CSRF token' {
         Mock -ModuleName FanCalibration Invoke-RestMethod {
-            $script:capturedConnectArgs = $args
-            $script:capturedConnectParams = $PSBoundParameters
             return [pscustomobject]@{ CSRFToken = 'abc123'; ok = 1 }
         }
 
@@ -190,6 +188,7 @@ Describe 'Invoke-BmcApi' {
 Describe 'Invoke-FanSweep' {
     BeforeEach {
         $script:modeCalls = @()
+        $script:putBodies = @()
         $fanProfileResponse = [pscustomobject]@{
             strMode = 'quiet'
             strVersion = '1.00'
@@ -200,6 +199,10 @@ Describe 'Invoke-FanSweep' {
                         [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1); iSensorCode = 1; iPolicyType = 2; iInSDR = 1; iInitDuty = 40; iCpuTdp = 0; iAmbientSensor = 0; iAmbientSensorTemp = 0; arrRef = @(30,76); arrDuty = @(25,100); arrHexVendorID = @(); arrHexDeviceID = @(); iPCIEDeviceEnable = 0; iHysteresis = 3 }
                         [pscustomobject]@{ arrFanSensor = @(185,186); arrSensor = @(4,8,14,16); iSensorCode = 3; iPolicyType = 2; iInSDR = 1; iInitDuty = 40; iCpuTdp = 0; iAmbientSensor = 0; iAmbientSensorTemp = 0; arrRef = @(30,72); arrDuty = @(20,100); arrHexVendorID = @(); arrHexDeviceID = @(); iPCIEDeviceEnable = 0; iHysteresis = 4 }
                     )
+                }
+                [pscustomobject]@{
+                    strName = 'calibration'; strVersion = '1.00'
+                    arrPolicy = @()
                 }
             )
         }
@@ -213,6 +216,13 @@ Describe 'Invoke-FanSweep' {
             switch ("$Method $Path") {
                 'Get /api/settings/fanprofile' { return $fanProfileResponse }
                 'Get /api/sensors'             { return $sensorsResponse }
+                'Put /api/settings/fanprofile/collection/calibration' {
+                    $script:putBodies += [pscustomobject]@{
+                        CpuInitDuty    = $Body.arrPolicy[0].iInitDuty
+                        SystemInitDuty = $Body.arrPolicy[1].iInitDuty
+                    }
+                    return $Body
+                }
                 'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
                 default { return $null }
             }
@@ -235,6 +245,21 @@ Describe 'Invoke-FanSweep' {
         # mode was switched to calibration at least once, and the LAST mode call restores 'quiet'
         $script:modeCalls | Should -Contain 'calibration'
         $script:modeCalls[-1] | Should -Be 'quiet'
+
+        # zone isolation: 6 PUT calls total (3 duty steps x 2 zones).
+        $script:putBodies.Count | Should -Be 6
+
+        # first 3 PUTs are the CPU-zone pass: CPU duty tracks the sweep value,
+        # System duty stays pinned at the baseline (50).
+        $cpuPassPuts = $script:putBodies[0..2]
+        $cpuPassPuts.CpuInitDuty | Should -Be @(20,50,100)
+        $cpuPassPuts.SystemInitDuty | Should -Be @(50,50,50)
+
+        # last 3 PUTs are the System-zone pass: System duty tracks the sweep
+        # value, CPU duty stays pinned at the baseline (50).
+        $systemPassPuts = $script:putBodies[3..5]
+        $systemPassPuts.SystemInitDuty | Should -Be @(20,50,100)
+        $systemPassPuts.CpuInitDuty | Should -Be @(50,50,50)
     }
 
     It 'still restores the original mode when a sensor read fails mid-sweep' {
@@ -253,5 +278,106 @@ Describe 'Invoke-FanSweep' {
             -SleepCommand { param($Seconds) } } | Should -Throw
 
         $script:modeCalls[-1] | Should -Be 'quiet'
+    }
+
+    It 'throws immediately without touching the BMC further if a previous crashed run left strMode on calibration' {
+        $stuckProfile = [pscustomobject]@{
+            strMode = 'calibration'
+            strVersion = '1.00'
+            arrProfile = $fanProfileResponse.arrProfile
+        }
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $stuckProfile }
+                default { throw "unexpected call: $Method $Path" }
+            }
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*calibration*'
+    }
+
+    It 'throws when the calibration profile collection does not exist yet on the BMC' {
+        $missingCalibrationProfile = [pscustomobject]@{
+            strMode = 'quiet'
+            strVersion = '1.00'
+            arrProfile = @($fanProfileResponse.arrProfile[0])  # only 'quiet', no 'calibration' entry
+        }
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $missingCalibrationProfile }
+                default { throw "unexpected call: $Method $Path" }
+            }
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage "*calibration*"
+    }
+
+    It 'retries a sentinel sensor reading once and recovers a healthy value on the retry' {
+        $script:sensorCallCount = 0
+        $script:sleepCalls = @()
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $fanProfileResponse }
+                'Get /api/sensors' {
+                    $script:sensorCallCount++
+                    if ($script:sensorCallCount -eq 1) {
+                        return @(
+                            [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; raw_reading = 252; reading = 0.0 }
+                            [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1'; raw_reading = 8; reading = 1200.0 }
+                            [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2'; raw_reading = 6; reading = 900.0 }
+                        )
+                    }
+                    return $sensorsResponse
+                }
+                'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
+                default { return $null }
+            }
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) $script:sleepCalls += $Seconds }
+
+        ($rows | Where-Object { $_.FanName -eq 'CPU0_FAN' -and $_.DutyPercent -eq 20 }).RPM | Should -Be '1350'
+        # exactly one retry happened: 2 sensor calls for the CPU-zone step (initial+retry)
+        # + 1 for the System-zone step (no retry needed, healthy on first try) = 3
+        $script:sensorCallCount | Should -Be 3
+        $script:sleepCalls | Should -Contain 3
+    }
+
+    It 'records NA after exactly one retry when a sensor reading is persistently sentinel' {
+        $script:sensorCallCount = 0
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $fanProfileResponse }
+                'Get /api/sensors' {
+                    $script:sensorCallCount++
+                    return @(
+                        [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; raw_reading = 252; reading = 0.0 }
+                        [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1'; raw_reading = 8; reading = 1200.0 }
+                        [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2'; raw_reading = 6; reading = 900.0 }
+                    )
+                }
+                'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
+                default { return $null }
+            }
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) }
+
+        ($rows | Where-Object { $_.FanName -eq 'CPU0_FAN' -and $_.DutyPercent -eq 20 }).RPM | Should -Be 'NA'
+        # exactly one retry (not zero, not looping): same call count (3) as the
+        # recovery case above, only the outcome (still sentinel) differs.
+        $script:sensorCallCount | Should -Be 3
     }
 }
