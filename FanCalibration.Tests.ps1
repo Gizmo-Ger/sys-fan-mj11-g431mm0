@@ -128,3 +128,61 @@ Describe 'New-CalibrationCsvRow' {
         $row.RPM | Should -Be 'NA'
     }
 }
+
+Describe 'Connect-Bmc' {
+    It 'posts credentials and returns the session plus CSRF token' {
+        Mock -ModuleName FanCalibration Invoke-RestMethod {
+            $script:capturedConnectArgs = $args
+            $script:capturedConnectParams = $PSBoundParameters
+            return [pscustomobject]@{ CSRFToken = 'abc123'; ok = 1 }
+        }
+
+        $cred = [pscredential]::new('admin', (ConvertTo-SecureString 'password' -AsPlainText -Force))
+        $conn = Connect-Bmc -BmcHost '192.168.178.21' -Credential $cred
+
+        $conn.CsrfToken | Should -Be 'abc123'
+        Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'https://192.168.178.21/api/session' -and
+            $Method -eq 'Post' -and
+            $Body.username -eq 'admin' -and
+            $Body.password -eq 'password' -and
+            $Headers['X-CSRFTOKEN'] -eq 'null'
+        }
+    }
+
+    It 'throws when the response has no CSRFToken' {
+        Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ ok = 0 } }
+        $cred = [pscredential]::new('admin', (ConvertTo-SecureString 'wrong' -AsPlainText -Force))
+        { Connect-Bmc -BmcHost '192.168.178.21' -Credential $cred } | Should -Throw
+    }
+}
+
+Describe 'Invoke-BmcApi' {
+    It 'sends a GET with the session and CSRF header' {
+        Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ result = 'ok' } }
+        $conn = [pscustomobject]@{ WebSession = (New-Object Microsoft.PowerShell.Commands.WebRequestSession); CsrfToken = 'tok1' }
+
+        $result = Invoke-BmcApi -Connection $conn -BmcHost '192.168.178.21' -Path '/api/sensors'
+
+        $result.result | Should -Be 'ok'
+        Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'https://192.168.178.21/api/sensors' -and
+            $Method -eq 'Get' -and
+            $Headers['X-CSRFTOKEN'] -eq 'tok1' -and
+            $Headers['X-Requested-With'] -eq 'XMLHttpRequest'
+        }
+    }
+
+    It 'JSON-encodes the body for a PUT/POST' {
+        Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ strMode = 'calibration' } }
+        $conn = [pscustomobject]@{ WebSession = (New-Object Microsoft.PowerShell.Commands.WebRequestSession); CsrfToken = 'tok1' }
+
+        Invoke-BmcApi -Connection $conn -BmcHost '192.168.178.21' -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = 'calibration' } | Out-Null
+
+        Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Method -eq 'Post' -and
+            $ContentType -eq 'application/json' -and
+            $Body -eq '{"strMode":"calibration"}'
+        }
+    }
+}

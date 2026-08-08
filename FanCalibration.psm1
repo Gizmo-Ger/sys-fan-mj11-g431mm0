@@ -74,4 +74,51 @@ function New-CalibrationCsvRow {
     }
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow
+function Connect-Bmc {
+    param(
+        [Parameter(Mandatory)][string]$BmcHost,
+        [Parameter(Mandatory)][pscredential]$Credential
+    )
+    $body = @{
+        username = $Credential.UserName
+        password = $Credential.GetNetworkCredential().Password
+    }
+    $headers = @{ 'X-CSRFTOKEN' = 'null'; 'X-Requested-With' = 'XMLHttpRequest' }
+    $response = Invoke-RestMethod -Uri "https://$BmcHost/api/session" -Method Post -Body $body `
+        -ContentType 'application/x-www-form-urlencoded' -Headers $headers `
+        -SessionVariable bmcSession -SkipCertificateCheck -TimeoutSec 15
+
+    if (-not $response.CSRFToken) {
+        throw "BMC-Login fehlgeschlagen: keine CSRFToken in der Antwort."
+    }
+    return [pscustomobject]@{
+        WebSession = $bmcSession
+        CsrfToken  = $response.CSRFToken
+    }
+}
+
+function Invoke-BmcApi {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Connection,
+        [Parameter(Mandatory)][string]$BmcHost,
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Method = 'Get',
+        $Body = $null
+    )
+    $headers = @{ 'X-CSRFTOKEN' = $Connection.CsrfToken; 'X-Requested-With' = 'XMLHttpRequest' }
+    $params = @{
+        Uri                  = "https://$BmcHost$Path"
+        Method               = $Method
+        WebSession           = $Connection.WebSession
+        Headers              = $headers
+        SkipCertificateCheck = $true
+        TimeoutSec           = 15
+    }
+    if ($null -ne $Body) {
+        $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress)
+        $params.ContentType = 'application/json'
+    }
+    return Invoke-RestMethod @params
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi
