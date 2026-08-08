@@ -36,6 +36,25 @@ hardware-compatible sibling SKU (e.g. `MJ11-EC0-00`) unlocks the sensors as a
 side effect. See `SYS_FAN_HOWTO.md` for the full explanation and
 `QUICKSTART.md` to just get it done.
 
+## Fan PWM/RPM calibration tool
+
+- **[Calibrate-FanCurve.ps1](Calibrate-FanCurve.ps1)** — sweeps PWM duty per
+  fan zone (CPU / System) on the BMC and records the resulting RPM to a CSV,
+  using an isolated `calibration` fan-profile collection so it never touches
+  the live `default`/`quiet` profiles.
+
+**One-time setup on a fresh BMC:** the `calibration` collection must exist
+before this tool's PUT calls will succeed. Create it once, manually:
+
+```
+POST /api/settings/fanprofile/collection
+Body: {"strName":"calibration", ...same shape as an existing collection's
+       arrPolicy, e.g. copy the active profile's arrPolicy array}
+```
+
+If this collection is missing, the script's preflight check fails fast with
+an explicit error naming this requirement, rather than silently failing.
+
 ## Open question — help wanted
 
 The `sysadmin` SSH lockout on newer firmware looks like it might be just a
