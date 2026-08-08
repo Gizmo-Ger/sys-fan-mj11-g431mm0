@@ -6,3 +6,4 @@ esp32-mj11-uart-gateway/sdkconfig.old
 esp32-mj11-uart-gateway/**/*.bin
 .worktrees/
 .superpowers/
+fan-calibration-*.csv
