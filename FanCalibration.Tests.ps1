@@ -55,3 +55,54 @@ Describe 'Get-FanRpm' {
         Get-FanRpm -Sensors $sensors -SensorNumber 999 | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Get-ZoneTemplate' {
+    BeforeAll {
+        $fanProfileResponse = [pscustomobject]@{
+            strMode = 'quiet'
+            strVersion = '1.00'
+            arrProfile = @(
+                [pscustomobject]@{
+                    strName = 'default'; strVersion = '1.00'
+                    arrPolicy = @([pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1) })
+                }
+                [pscustomobject]@{
+                    strName = 'quiet'; strVersion = '1.00'
+                    arrPolicy = @(
+                        [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1); iSensorCode = 1 }
+                        [pscustomobject]@{ arrFanSensor = @(185,186); arrSensor = @(4,8,14,16); iSensorCode = 3 }
+                    )
+                }
+            )
+        }
+    }
+
+    It 'finds the CPU zone policy in the active profile' {
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 184
+        $result.arrFanSensor | Should -Be @(184)
+        $result.iSensorCode | Should -Be 1
+    }
+    It 'finds the System zone policy in the active profile' {
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 185
+        $result.arrFanSensor | Should -Be @(185,186)
+        $result.iSensorCode | Should -Be 3
+    }
+    It 'throws when no policy matches the requested fan sensor' {
+        { Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 999 } | Should -Throw
+    }
+}
+
+Describe 'New-CalibrationProfileBody' {
+    It 'builds the calibration collection body from two zone policies' {
+        $cpu = [pscustomobject]@{ arrFanSensor = @(184) }
+        $sys = [pscustomobject]@{ arrFanSensor = @(185,186) }
+
+        $body = New-CalibrationProfileBody -CpuZonePolicy $cpu -SystemZonePolicy $sys
+
+        $body.strName | Should -Be 'calibration'
+        $body.strVersion | Should -Be '1.00'
+        $body.arrPolicy.Count | Should -Be 2
+        $body.arrPolicy[0].arrFanSensor | Should -Be @(184)
+        $body.arrPolicy[1].arrFanSensor | Should -Be @(185,186)
+    }
+}

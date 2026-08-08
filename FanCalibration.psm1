@@ -26,4 +26,36 @@ function Get-FanRpm {
     return [double]$sensor.reading
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm
+function Get-ZoneTemplate {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$FanProfileResponse,
+        [Parameter(Mandatory)][int]$FanSensorNumber
+    )
+    $activeProfile = $FanProfileResponse.arrProfile |
+        Where-Object { $_.strName -eq $FanProfileResponse.strMode } |
+        Select-Object -First 1
+    if (-not $activeProfile) {
+        throw "Aktives Profil '$($FanProfileResponse.strMode)' nicht in arrProfile gefunden."
+    }
+    $policy = $activeProfile.arrPolicy |
+        Where-Object { $FanSensorNumber -in $_.arrFanSensor } |
+        Select-Object -First 1
+    if (-not $policy) {
+        throw "Keine Policy fuer Fan-Sensor $FanSensorNumber im aktiven Profil gefunden."
+    }
+    return $policy
+}
+
+function New-CalibrationProfileBody {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$CpuZonePolicy,
+        [Parameter(Mandatory)][pscustomobject]$SystemZonePolicy
+    )
+    return [pscustomobject]@{
+        strName    = 'calibration'
+        strVersion = '1.00'
+        arrPolicy  = @($CpuZonePolicy, $SystemZonePolicy)
+    }
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody
