@@ -23,3 +23,12 @@ Describe 'New-FlatCurvePolicy' {
         $result.iHysteresis | Should -Be 3
     }
 }
+
+Describe 'Test-SentinelReading' {
+    It 'flags the known sentinel raw_reading value' {
+        Test-SentinelReading -Sensor ([pscustomobject]@{ raw_reading = 252; reading = -4.0 }) | Should -BeTrue
+    }
+    It 'does not flag a normal reading' {
+        Test-SentinelReading -Sensor ([pscustomobject]@{ raw_reading = 60; reading = 60.0 }) | Should -BeFalse
+    }
+}

@@ -10,4 +10,9 @@ function New-FlatCurvePolicy {
     return $policy
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy
+function Test-SentinelReading {
+    param([Parameter(Mandatory)][pscustomobject]$Sensor)
+    return $Sensor.raw_reading -eq 252
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading
