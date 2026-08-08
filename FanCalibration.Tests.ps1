@@ -32,3 +32,26 @@ Describe 'Test-SentinelReading' {
         Test-SentinelReading -Sensor ([pscustomobject]@{ raw_reading = 60; reading = 60.0 }) | Should -BeFalse
     }
 }
+
+Describe 'Get-FanRpm' {
+    BeforeAll {
+        $sensors = @(
+            [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; raw_reading = 9; reading = 1350.0 }
+            [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1'; raw_reading = 0; reading = 0.0 }
+            [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2'; raw_reading = 252; reading = 0.0 }
+        )
+    }
+
+    It 'returns the RPM for a healthy reading' {
+        Get-FanRpm -Sensors $sensors -SensorNumber 184 | Should -Be 1350.0
+    }
+    It 'returns 0 for a genuinely stopped fan (not a sentinel)' {
+        Get-FanRpm -Sensors $sensors -SensorNumber 185 | Should -Be 0.0
+    }
+    It 'returns $null for a sentinel reading' {
+        Get-FanRpm -Sensors $sensors -SensorNumber 186 | Should -BeNullOrEmpty
+    }
+    It 'returns $null when the sensor number is not present' {
+        Get-FanRpm -Sensors $sensors -SensorNumber 999 | Should -BeNullOrEmpty
+    }
+}

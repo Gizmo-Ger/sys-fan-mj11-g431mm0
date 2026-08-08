@@ -15,4 +15,15 @@ function Test-SentinelReading {
     return $Sensor.raw_reading -eq 252
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading
+function Get-FanRpm {
+    param(
+        [Parameter(Mandatory)][array]$Sensors,
+        [Parameter(Mandatory)][int]$SensorNumber
+    )
+    $sensor = $Sensors | Where-Object { $_.sensor_number -eq $SensorNumber } | Select-Object -First 1
+    if (-not $sensor) { return $null }
+    if (Test-SentinelReading -Sensor $sensor) { return $null }
+    return [double]$sensor.reading
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm
