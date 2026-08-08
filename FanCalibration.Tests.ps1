@@ -90,6 +90,14 @@ Describe 'Get-ZoneTemplate' {
     It 'throws when no policy matches the requested fan sensor' {
         { Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 999 } | Should -Throw
     }
+    It 'throws when the active profile is not found in arrProfile' {
+        $badResponse = [pscustomobject]@{
+            strMode = 'nonexistent'
+            strVersion = '1.00'
+            arrProfile = $fanProfileResponse.arrProfile
+        }
+        { Get-ZoneTemplate -FanProfileResponse $badResponse -FanSensorNumber 184 } | Should -Throw
+    }
 }
 
 Describe 'New-CalibrationProfileBody' {
