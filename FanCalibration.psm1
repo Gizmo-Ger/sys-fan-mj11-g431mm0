@@ -121,4 +121,62 @@ function Invoke-BmcApi {
     return Invoke-RestMethod @params
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi
+function Invoke-FanSweep {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Connection,
+        [Parameter(Mandatory)][string]$BmcHost,
+        [Parameter(Mandatory)][int[]]$DutySteps,
+        [Parameter(Mandatory)][int]$BaselineDutyPercent,
+        [Parameter(Mandatory)][int]$SettleSeconds,
+        [scriptblock]$SleepCommand = { param($Seconds) Start-Sleep -Seconds $Seconds }
+    )
+
+    $zones = @(
+        @{ Name = 'CPU';    FanSensorNumbers = @(184) }
+        @{ Name = 'System'; FanSensorNumbers = @(185, 186) }
+    )
+    $fanNames = @{ 184 = 'CPU0_FAN'; 185 = 'SYS_FAN1'; 186 = 'SYS_FAN2' }
+
+    $fanProfile = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/settings/fanprofile' -Method 'Get'
+    $originalMode = $fanProfile.strMode
+    $cpuTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 184
+    $systemTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 185
+
+    $rows = @()
+
+    try {
+        foreach ($zone in $zones) {
+            foreach ($duty in $DutySteps) {
+                $cpuDuty = if ($zone.Name -eq 'CPU') { $duty } else { $BaselineDutyPercent }
+                $sysDuty = if ($zone.Name -eq 'System') { $duty } else { $BaselineDutyPercent }
+
+                $cpuPolicy = New-FlatCurvePolicy -SourcePolicy $cpuTemplate -DutyPercent $cpuDuty
+                $sysPolicy = New-FlatCurvePolicy -SourcePolicy $systemTemplate -DutyPercent $sysDuty
+                $body = New-CalibrationProfileBody -CpuZonePolicy $cpuPolicy -SystemZonePolicy $sysPolicy
+
+                Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
+                    -Path '/api/settings/fanprofile/collection/calibration' -Method 'Put' -Body $body | Out-Null
+                Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
+                    -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = 'calibration' } | Out-Null
+
+                & $SleepCommand $SettleSeconds
+
+                $sensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
+
+                foreach ($sensorNumber in $zone.FanSensorNumbers) {
+                    $rpm = Get-FanRpm -Sensors $sensors -SensorNumber $sensorNumber
+                    $rows += New-CalibrationCsvRow -Zone $zone.Name -DutyPercent $duty `
+                        -FanName $fanNames[$sensorNumber] -Rpm $rpm
+                }
+            }
+        }
+    }
+    finally {
+        Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
+            -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = $originalMode } | Out-Null
+    }
+
+    return $rows
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep

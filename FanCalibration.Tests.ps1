@@ -186,3 +186,72 @@ Describe 'Invoke-BmcApi' {
         }
     }
 }
+
+Describe 'Invoke-FanSweep' {
+    BeforeEach {
+        $script:modeCalls = @()
+        $fanProfileResponse = [pscustomobject]@{
+            strMode = 'quiet'
+            strVersion = '1.00'
+            arrProfile = @(
+                [pscustomobject]@{
+                    strName = 'quiet'; strVersion = '1.00'
+                    arrPolicy = @(
+                        [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1); iSensorCode = 1; iPolicyType = 2; iInSDR = 1; iInitDuty = 40; iCpuTdp = 0; iAmbientSensor = 0; iAmbientSensorTemp = 0; arrRef = @(30,76); arrDuty = @(25,100); arrHexVendorID = @(); arrHexDeviceID = @(); iPCIEDeviceEnable = 0; iHysteresis = 3 }
+                        [pscustomobject]@{ arrFanSensor = @(185,186); arrSensor = @(4,8,14,16); iSensorCode = 3; iPolicyType = 2; iInSDR = 1; iInitDuty = 40; iCpuTdp = 0; iAmbientSensor = 0; iAmbientSensorTemp = 0; arrRef = @(30,72); arrDuty = @(20,100); arrHexVendorID = @(); arrHexDeviceID = @(); iPCIEDeviceEnable = 0; iHysteresis = 4 }
+                    )
+                }
+            )
+        }
+        $sensorsResponse = @(
+            [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; raw_reading = 9; reading = 1350.0 }
+            [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1'; raw_reading = 8; reading = 1200.0 }
+            [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2'; raw_reading = 6; reading = 900.0 }
+        )
+
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $fanProfileResponse }
+                'Get /api/sensors'             { return $sensorsResponse }
+                'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
+                default { return $null }
+            }
+        }
+    }
+
+    It 'sweeps both zones, restores the original mode, and returns one row per duty per fan' {
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20,50,100) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) }
+
+        # 3 duty steps x (1 CPU fan + 2 System fans) = 9 rows
+        $rows.Count | Should -Be 9
+        ($rows | Where-Object FanName -eq 'CPU0_FAN').Count | Should -Be 3
+        ($rows | Where-Object FanName -eq 'SYS_FAN1').Count | Should -Be 3
+        ($rows | Where-Object FanName -eq 'SYS_FAN2').Count | Should -Be 3
+        ($rows | Where-Object { $_.FanName -eq 'CPU0_FAN' -and $_.DutyPercent -eq 50 }).RPM | Should -Be '1350'
+
+        # mode was switched to calibration at least once, and the LAST mode call restores 'quiet'
+        $script:modeCalls | Should -Contain 'calibration'
+        $script:modeCalls[-1] | Should -Be 'quiet'
+    }
+
+    It 'still restores the original mode when a sensor read fails mid-sweep' {
+        Mock -ModuleName FanCalibration Invoke-BmcApi {
+            switch ("$Method $Path") {
+                'Get /api/settings/fanprofile' { return $fanProfileResponse }
+                'Get /api/sensors'             { throw 'simulated network failure' }
+                'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
+                default { return $null }
+            }
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 `
+            -SleepCommand { param($Seconds) } } | Should -Throw
+
+        $script:modeCalls[-1] | Should -Be 'quiet'
+    }
+}
