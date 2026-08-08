@@ -114,3 +114,17 @@ Describe 'New-CalibrationProfileBody' {
         $body.arrPolicy[1].arrFanSensor | Should -Be @(185,186)
     }
 }
+
+Describe 'New-CalibrationCsvRow' {
+    It 'formats a healthy reading' {
+        $row = New-CalibrationCsvRow -Zone 'CPU' -DutyPercent 50 -FanName 'CPU0_FAN' -Rpm 1350.0
+        $row.Zone | Should -Be 'CPU'
+        $row.DutyPercent | Should -Be 50
+        $row.FanName | Should -Be 'CPU0_FAN'
+        $row.RPM | Should -Be '1350'
+    }
+    It 'formats a missing/sentinel reading as NA' {
+        $row = New-CalibrationCsvRow -Zone 'System' -DutyPercent 30 -FanName 'SYS_FAN1' -Rpm $null
+        $row.RPM | Should -Be 'NA'
+    }
+}

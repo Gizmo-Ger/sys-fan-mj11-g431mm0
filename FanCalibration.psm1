@@ -58,4 +58,20 @@ function New-CalibrationProfileBody {
     }
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody
+function New-CalibrationCsvRow {
+    param(
+        [Parameter(Mandatory)][string]$Zone,
+        [Parameter(Mandatory)][int]$DutyPercent,
+        [Parameter(Mandatory)][string]$FanName,
+        [AllowNull()][Nullable[double]]$Rpm
+    )
+    $rpmValue = if ($null -eq $Rpm) { 'NA' } else { [string]$Rpm }
+    return [pscustomobject]@{
+        Zone        = $Zone
+        DutyPercent = $DutyPercent
+        FanName     = $FanName
+        RPM         = $rpmValue
+    }
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow
