@@ -381,3 +381,30 @@ Describe 'Invoke-FanSweep' {
         $script:sensorCallCount | Should -Be 3
     }
 }
+
+Describe 'Get-BmcInventory' {
+    BeforeAll {
+        $sensorsResponse = @(
+            [pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP'; type = 'temperature'; reading = 50.0; raw_reading = 50 }
+            [pscustomobject]@{ sensor_number = 4; name = 'DIMMG0_TEMP'; type = 'temperature'; reading = 55.0; raw_reading = 55 }
+            [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; type = 'fan'; reading = 1350.0; raw_reading = 9 }
+            [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1'; type = 'fan'; reading = 1200.0; raw_reading = 8 }
+            [pscustomobject]@{ sensor_number = 225; name = 'SEL'; type = 'event_logging_disabled'; reading = 0.0; raw_reading = 0 }
+        )
+    }
+
+    It 'splits sensors into fan and temperature inventories, ignoring other types' {
+        Mock -ModuleName FanCalibration Invoke-BmcApi { return $sensorsResponse }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        $inventory = Get-BmcInventory -Connection $conn -BmcHost '192.168.178.21'
+
+        $inventory.FanSensors.Count | Should -Be 2
+        $inventory.TempSensors.Count | Should -Be 2
+        ($inventory.FanSensors | Where-Object sensor_number -eq 184).name | Should -Be 'CPU0_FAN'
+        ($inventory.TempSensors | Where-Object sensor_number -eq 1).name | Should -Be 'CPU0_TEMP'
+        Should -Invoke -ModuleName FanCalibration Invoke-BmcApi -Times 1 -ParameterFilter {
+            $Path -eq '/api/sensors' -and $Method -eq 'Get'
+        }
+    }
+}

@@ -204,4 +204,22 @@ function Invoke-FanSweep {
     }
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep
+function Get-BmcInventory {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Connection,
+        [Parameter(Mandatory)][string]$BmcHost
+    )
+    $sensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
+    $fanSensors = @($sensors | Where-Object { $_.type -eq 'fan' } | ForEach-Object {
+        [pscustomobject]@{ sensor_number = $_.sensor_number; name = $_.name }
+    })
+    $tempSensors = @($sensors | Where-Object { $_.type -eq 'temperature' } | ForEach-Object {
+        [pscustomobject]@{ sensor_number = $_.sensor_number; name = $_.name }
+    })
+    return [pscustomobject]@{
+        FanSensors  = $fanSensors
+        TempSensors = $tempSensors
+    }
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory
