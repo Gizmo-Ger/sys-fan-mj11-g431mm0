@@ -600,3 +600,87 @@ Describe 'Read-ZoneWizard' {
         }
     }
 }
+
+Describe 'Resolve-Zones' {
+    BeforeAll {
+        $configPath = Join-Path $TestDrive 'bmc-zones-192.168.178.21.json'
+        $sampleZones = @(
+            [pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) }
+        )
+        $fanProfileWithPolicies = [pscustomobject]@{
+            strMode    = 'quiet'
+            arrProfile = @([pscustomobject]@{
+                strName   = 'quiet'
+                arrPolicy = @([pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1) })
+            })
+        }
+        $fanProfileFresh = [pscustomobject]@{
+            strMode    = 'default'
+            arrProfile = @([pscustomobject]@{ strName = 'default'; arrPolicy = @() })
+        }
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+        $wizardResult = @([pscustomobject]@{ Name = 'Wizard'; FanSensors = @(184); TempSensors = @(1) })
+    }
+
+    BeforeEach {
+        if (Test-Path -LiteralPath $configPath) { Remove-Item -LiteralPath $configPath -Force }
+    }
+
+    It 'loads the existing config file when present and -NewDevice is not set' {
+        Save-ZoneConfig -Path $configPath -Zones $sampleZones
+        Mock -ModuleName FanCalibration Get-BmcInventory { throw 'should not be called' }
+
+        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
+
+        $result[0].Name | Should -Be 'CPU0_FAN'
+    }
+
+    It 'derives zones from the active profile when no config exists and policies are present' {
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{
+                FanSensors  = @([pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN' })
+                TempSensors = @([pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP' })
+            }
+        }
+
+        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
+
+        $result[0].Name | Should -Be 'CPU0_FAN'
+        (Read-ZoneConfig -Path $configPath)[0].Name | Should -Be 'CPU0_FAN'
+    }
+
+    It 'runs the wizard when no config exists and the active profile has no policies' {
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
+        }
+
+        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+            -ConfigPath $configPath -WizardCommand { param($Inventory) $wizardResult }
+
+        $result[0].Name | Should -Be 'Wizard'
+        (Read-ZoneConfig -Path $configPath)[0].Name | Should -Be 'Wizard'
+    }
+
+    It '-NewDevice with confirmed overwrite runs the wizard even when config/policies exist' {
+        Save-ZoneConfig -Path $configPath -Zones $sampleZones
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
+        }
+
+        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies `
+            -ConfigPath $configPath -NewDevice -ConfirmCommand { param($Message) 'j' } `
+            -WizardCommand { param($Inventory) $wizardResult }
+
+        $result[0].Name | Should -Be 'Wizard'
+    }
+
+    It '-NewDevice with declined overwrite falls back to the existing config' {
+        Save-ZoneConfig -Path $configPath -Zones $sampleZones
+
+        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies `
+            -ConfigPath $configPath -NewDevice -ConfirmCommand { param($Message) 'n' } `
+            -WizardCommand { param($Inventory) throw 'should not run wizard' }
+
+        $result[0].Name | Should -Be 'CPU0_FAN'
+    }
+}

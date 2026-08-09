@@ -313,4 +313,43 @@ function Read-ZoneWizard {
     return @($zones)
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard
+function Resolve-Zones {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Connection,
+        [Parameter(Mandatory)][string]$BmcHost,
+        [Parameter(Mandatory)][pscustomobject]$FanProfileResponse,
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [switch]$NewDevice,
+        [scriptblock]$ConfirmCommand = { param($Message) Read-Host $Message },
+        [scriptblock]$WizardCommand = { param($Inventory) Read-ZoneWizard -Inventory $Inventory }
+    )
+
+    $existing = Read-ZoneConfig -Path $ConfigPath
+
+    if ($existing -and -not $NewDevice) {
+        return $existing
+    }
+
+    if ($existing -and $NewDevice) {
+        $answer = & $ConfirmCommand 'Bestehende Zonen-Config gefunden, wirklich ueberschreiben? (j/n)'
+        if ($answer -ne 'j') {
+            return $existing
+        }
+    }
+
+    $inventory = Get-BmcInventory -Connection $Connection -BmcHost $BmcHost
+
+    if (-not $NewDevice) {
+        $derived = New-ZonesFromProfile -FanProfileResponse $FanProfileResponse -Inventory $inventory
+        if ($derived) {
+            Save-ZoneConfig -Path $ConfigPath -Zones $derived
+            return $derived
+        }
+    }
+
+    $wizardZones = & $WizardCommand $inventory
+    Save-ZoneConfig -Path $ConfigPath -Zones $wizardZones
+    return $wizardZones
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard, Resolve-Zones
