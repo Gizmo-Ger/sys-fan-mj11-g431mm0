@@ -484,6 +484,7 @@ Describe 'New-ZonesFromProfile' {
         $zones[0].TempSensors | Should -Be @(1)
         $zones[1].Name | Should -Be 'SYS_FAN1+SYS_FAN2'
         $zones[1].FanSensors | Should -Be @(185, 186)
+        $zones[1].TempSensors | Should -Be @(4, 8, 14, 16)
     }
 
     It 'returns $null when the active profile has no policies' {
@@ -497,5 +498,17 @@ Describe 'New-ZonesFromProfile' {
     It 'returns $null when no profile matches the active strMode' {
         $noMatch = [pscustomobject]@{ strMode = 'missing'; arrProfile = @() }
         New-ZonesFromProfile -FanProfileResponse $noMatch -Inventory $inventory | Should -BeNullOrEmpty
+    }
+
+    It 'falls back to "sensorN" when a fan sensor number is missing from the inventory' {
+        $profileWithUnknownFan = [pscustomobject]@{
+            strMode    = 'quiet'
+            arrProfile = @([pscustomobject]@{
+                strName   = 'quiet'
+                arrPolicy = @([pscustomobject]@{ arrFanSensor = @(999); arrSensor = @(1) })
+            })
+        }
+        $zones = New-ZonesFromProfile -FanProfileResponse $profileWithUnknownFan -Inventory $inventory
+        $zones[0].Name | Should -Be 'sensor999'
     }
 }
