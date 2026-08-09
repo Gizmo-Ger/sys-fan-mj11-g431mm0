@@ -157,17 +157,15 @@ function Invoke-FanSweep {
         throw "Profil 'calibration' existiert nicht auf dem BMC. Einmalig anlegen: POST /api/settings/fanprofile/collection mit Body {`"strName`":`"calibration`",...}"
     }
 
-    $zoneTemplates = @{}
-    foreach ($zone in $Zones) {
-        $zoneTemplates[$zone.Name] = Get-ZoneTemplate -FanProfileResponse $fanProfile -Zone $zone
-    }
+    $zoneTemplates = @($Zones | ForEach-Object { Get-ZoneTemplate -FanProfileResponse $fanProfile -Zone $_ })
 
     try {
-        foreach ($zoneUnderTest in $Zones) {
+        for ($zoneUnderTestIndex = 0; $zoneUnderTestIndex -lt $Zones.Count; $zoneUnderTestIndex++) {
+            $zoneUnderTest = $Zones[$zoneUnderTestIndex]
             foreach ($duty in $DutySteps) {
-                $zonePolicies = foreach ($zone in $Zones) {
-                    $d = if ($zone.Name -eq $zoneUnderTest.Name) { $duty } else { $BaselineDutyPercent }
-                    New-FlatCurvePolicy -SourcePolicy $zoneTemplates[$zone.Name] -DutyPercent $d
+                $zonePolicies = for ($i = 0; $i -lt $Zones.Count; $i++) {
+                    $d = if ($i -eq $zoneUnderTestIndex) { $duty } else { $BaselineDutyPercent }
+                    New-FlatCurvePolicy -SourcePolicy $zoneTemplates[$i] -DutyPercent $d
                 }
                 $body = New-CalibrationProfileBody -ZonePolicies $zonePolicies
 
@@ -237,7 +235,18 @@ function Read-ZoneConfig {
     if (-not (Test-Path -LiteralPath $Path)) {
         return $null
     }
-    return @(Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+    try {
+        $parsed = @(Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+    }
+    catch {
+        throw "Zonen-Config '$Path' konnte nicht gelesen werden (ungueltiges JSON): $_"
+    }
+    foreach ($entry in $parsed) {
+        if ($null -eq $entry.Name -or $entry.FanSensors -isnot [array] -or $entry.TempSensors -isnot [array]) {
+            throw "Zonen-Config '$Path' ist fehlerhaft: jeder Eintrag braucht Name, FanSensors (Array) und TempSensors (Array)."
+        }
+    }
+    return $parsed
 }
 
 function Save-ZoneConfig {
@@ -320,7 +329,10 @@ function Read-ZoneWizard {
         Write-Warning "Folgende Fan-Sensoren wurden keiner Zone zugeordnet: $($unassigned -join ', ')"
     }
 
-    return @($zones)
+    # Use the unary comma operator to keep this a single array object on the
+    # pipeline. A plain `return @($zones)` unrolls an empty array to zero
+    # pipeline objects, which the caller sees as $null instead of @().
+    return ,@($zones)
 }
 
 function Resolve-Zones {
@@ -335,31 +347,52 @@ function Resolve-Zones {
     )
 
     $existing = Read-ZoneConfig -Path $ConfigPath
+    $result = $null
 
     if ($existing -and -not $NewDevice) {
-        return $existing
+        $result = $existing
     }
-
-    if ($existing -and $NewDevice) {
+    elseif ($existing -and $NewDevice) {
         $answer = & $ConfirmCommand 'Bestehende Zonen-Config gefunden, wirklich ueberschreiben? (j/n)'
         if ($answer -ne 'j') {
-            return $existing
+            $result = $existing
         }
     }
 
-    $inventory = Get-BmcInventory -Connection $Connection -BmcHost $BmcHost
+    if (-not $result) {
+        $inventory = Get-BmcInventory -Connection $Connection -BmcHost $BmcHost
 
-    if (-not $NewDevice) {
-        $derived = New-ZonesFromProfile -FanProfileResponse $FanProfileResponse -Inventory $inventory
+        $derived = $null
+        if (-not $NewDevice) {
+            $derived = New-ZonesFromProfile -FanProfileResponse $FanProfileResponse -Inventory $inventory
+        }
+
         if ($derived) {
             Save-ZoneConfig -Path $ConfigPath -Zones $derived
-            return $derived
+            $result = $derived
+        }
+        else {
+            $wizardZones = & $WizardCommand $inventory
+            if (@($wizardZones).Count -eq 0) {
+                if (@($inventory.FanSensors).Count -eq 0) {
+                    throw "BMC meldet keine Fan-Sensoren - Zonen-Konfiguration nicht moeglich."
+                }
+                throw "Zonen-Assistent abgebrochen - keine Zonen konfiguriert."
+            }
+            Save-ZoneConfig -Path $ConfigPath -Zones $wizardZones
+            $result = $wizardZones
         }
     }
 
-    $wizardZones = & $WizardCommand $inventory
-    Save-ZoneConfig -Path $ConfigPath -Zones $wizardZones
-    return $wizardZones
+    # Single choke point for all 4 return paths above: reject duplicate zone
+    # Names here, since Invoke-FanSweep's index-based fix avoids data
+    # corruption but duplicate names are still confusing/wrong in CSV output.
+    $duplicateNames = @($result | Group-Object -Property Name | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+    if ($duplicateNames.Count -gt 0) {
+        throw "Zonen-Konfiguration enthaelt doppelte Zonen-Namen: $($duplicateNames -join ', ')"
+    }
+
+    return $result
 }
 
 Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard, Resolve-Zones
