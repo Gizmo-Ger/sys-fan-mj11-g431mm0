@@ -43,17 +43,38 @@ side effect. See `SYS_FAN_HOWTO.md` for the full explanation and
   using an isolated `calibration` fan-profile collection so it never touches
   the live `default`/`quiet` profiles.
 
-**One-time setup on a fresh BMC:** the `calibration` collection must exist
-before this tool's PUT calls will succeed. Create it once, manually:
+### Required parameters
+
+**`-BmcHost` (required)** — The IP address or hostname of the target BMC. The
+tool is now generalized to any BMC, not bound to a single IP. Zone
+configuration is saved and reused per BMC instance.
+
+### One-time setup on a fresh BMC
+
+The `calibration` fan-profile collection must exist before the script's API
+calls will succeed. Create it once with this POST request:
 
 ```
 POST /api/settings/fanprofile/collection
-Body: {"strName":"calibration", ...same shape as an existing collection's
-       arrPolicy, e.g. copy the active profile's arrPolicy array}
+Content-Type: application/json
+{"strName":"calibration","strVersion":"1.00","arrPolicy":[]}
 ```
 
-If this collection is missing, the script's preflight check fails fast with
-an explicit error naming this requirement, rather than silently failing.
+Use your logged-in browser session's cookie + X-CSRFTOKEN header. The script's
+preflight check will fail fast with an explicit error if this collection is
+missing, rather than silently failing mid-sweep.
+
+### Zone configuration and `-NewDevice`
+
+On the first run against a new BMC (or any BMC without a saved zone config),
+the script launches an interactive wizard to map fan sensors to PWM lines and
+temp sensors. Zone configuration is then saved to `bmc-zones-<host>.json`
+(gitignored) and reused automatically on all subsequent runs.
+
+**`-NewDevice` (switch)** — Force the zone wizard to run again, discarding the
+saved config. Use this after swapping hardware (fans, temp sensors) or when
+reconfiguring fan zones. Without this flag, the saved config is always
+preferred.
 
 ## Open question — help wanted
 
