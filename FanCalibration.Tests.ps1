@@ -448,3 +448,54 @@ Describe 'Read-ZoneConfig and Save-ZoneConfig' {
         $loaded.Count | Should -Be 0
     }
 }
+
+Describe 'New-ZonesFromProfile' {
+    BeforeAll {
+        $inventory = [pscustomobject]@{
+            FanSensors  = @(
+                [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN' }
+                [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1' }
+                [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2' }
+            )
+            TempSensors = @(
+                [pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP' }
+            )
+        }
+        $fanProfileResponse = [pscustomobject]@{
+            strMode    = 'quiet'
+            arrProfile = @(
+                [pscustomobject]@{
+                    strName   = 'quiet'
+                    arrPolicy = @(
+                        [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1) }
+                        [pscustomobject]@{ arrFanSensor = @(185, 186); arrSensor = @(4, 8, 14, 16) }
+                    )
+                }
+            )
+        }
+    }
+
+    It 'derives one zone per policy, named from joined fan sensor names' {
+        $zones = New-ZonesFromProfile -FanProfileResponse $fanProfileResponse -Inventory $inventory
+
+        $zones.Count | Should -Be 2
+        $zones[0].Name | Should -Be 'CPU0_FAN'
+        $zones[0].FanSensors | Should -Be @(184)
+        $zones[0].TempSensors | Should -Be @(1)
+        $zones[1].Name | Should -Be 'SYS_FAN1+SYS_FAN2'
+        $zones[1].FanSensors | Should -Be @(185, 186)
+    }
+
+    It 'returns $null when the active profile has no policies' {
+        $emptyProfile = [pscustomobject]@{
+            strMode    = 'fresh'
+            arrProfile = @([pscustomobject]@{ strName = 'fresh'; arrPolicy = @() })
+        }
+        New-ZonesFromProfile -FanProfileResponse $emptyProfile -Inventory $inventory | Should -BeNullOrEmpty
+    }
+
+    It 'returns $null when no profile matches the active strMode' {
+        $noMatch = [pscustomobject]@{ strMode = 'missing'; arrProfile = @() }
+        New-ZonesFromProfile -FanProfileResponse $noMatch -Inventory $inventory | Should -BeNullOrEmpty
+    }
+}

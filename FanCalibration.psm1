@@ -238,4 +238,31 @@ function Save-ZoneConfig {
     ConvertTo-Json -InputObject $Zones -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig
+function New-ZonesFromProfile {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$FanProfileResponse,
+        [Parameter(Mandatory)][pscustomobject]$Inventory
+    )
+    $activeProfile = $FanProfileResponse.arrProfile |
+        Where-Object { $_.strName -eq $FanProfileResponse.strMode } |
+        Select-Object -First 1
+    if (-not $activeProfile -or @($activeProfile.arrPolicy).Count -eq 0) {
+        return $null
+    }
+
+    $zones = foreach ($policy in $activeProfile.arrPolicy) {
+        $fanSensors = @($policy.arrFanSensor)
+        $names = foreach ($fs in $fanSensors) {
+            $match = $Inventory.FanSensors | Where-Object { $_.sensor_number -eq $fs } | Select-Object -First 1
+            if ($match) { $match.name } else { "sensor$fs" }
+        }
+        [pscustomobject]@{
+            Name        = ($names -join '+')
+            FanSensors  = $fanSensors
+            TempSensors = @($policy.arrSensor)
+        }
+    }
+    return @($zones)
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile
