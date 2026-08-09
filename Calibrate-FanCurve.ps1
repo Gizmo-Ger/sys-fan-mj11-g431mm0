@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$BmcHost,
     [pscredential]$Credential,
-    [int[]]$DutySteps = @(20,30,40,50,60,70,80,90,100),
+    [ValidateNotNullOrEmpty()][int[]]$DutySteps = @(20,30,40,50,60,70,80,90,100),
     [int]$BaselineDutyPercent = 50,
     [int]$SettleSeconds = 20,
     [string]$OutDir = $PSScriptRoot,
