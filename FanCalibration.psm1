@@ -265,4 +265,38 @@ function New-ZonesFromProfile {
     return @($zones)
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile
+function Read-ZoneWizard {
+    param([Parameter(Mandatory)][pscustomobject]$Inventory)
+
+    Write-Host 'Fan-Sensoren:'
+    foreach ($f in $Inventory.FanSensors) { Write-Host ("  {0}: {1}" -f $f.sensor_number, $f.name) }
+    Write-Host 'Temp-Sensoren:'
+    foreach ($t in $Inventory.TempSensors) { Write-Host ("  {0}: {1}" -f $t.sensor_number, $t.name) }
+
+    $zones = @()
+    $assignedFans = @()
+    $allFanNumbers = @($Inventory.FanSensors.sensor_number)
+
+    while (@($allFanNumbers | Where-Object { $_ -notin $assignedFans }).Count -gt 0) {
+        $name = Read-Host 'Zone-Name (leer = fertig)'
+        if ([string]::IsNullOrWhiteSpace($name)) { break }
+
+        $fanInput = Read-Host 'Fan-Sensor-Nummern (kommagetrennt)'
+        $fanNums = @($fanInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+
+        $tempInput = Read-Host 'Temp-Sensor-Nummern (kommagetrennt, optional)'
+        $tempNums = @($tempInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+
+        $zones += [pscustomobject]@{ Name = $name; FanSensors = $fanNums; TempSensors = $tempNums }
+        $assignedFans += $fanNums
+    }
+
+    $unassigned = @($allFanNumbers | Where-Object { $_ -notin $assignedFans })
+    if ($unassigned.Count -gt 0) {
+        Write-Warning "Folgende Fan-Sensoren wurden keiner Zone zugeordnet: $($unassigned -join ', ')"
+    }
+
+    return @($zones)
+}
+
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard

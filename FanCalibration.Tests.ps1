@@ -512,3 +512,70 @@ Describe 'New-ZonesFromProfile' {
         $zones[0].Name | Should -Be 'sensor999'
     }
 }
+
+Describe 'Read-ZoneWizard' {
+    BeforeAll {
+        $inventory = [pscustomobject]@{
+            FanSensors  = @(
+                [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN' }
+                [pscustomobject]@{ sensor_number = 185; name = 'SYS_FAN1' }
+                [pscustomobject]@{ sensor_number = 186; name = 'SYS_FAN2' }
+            )
+            TempSensors = @(
+                [pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP' }
+            )
+        }
+    }
+
+    It 'builds zones from a scripted sequence of Read-Host answers, stopping on empty name' {
+        $script:answers = @('CPU', '184', '1', 'System', '185,186', '4,8', '')
+        $script:answerIndex = 0
+        Mock -ModuleName FanCalibration Read-Host {
+            $value = $script:answers[$script:answerIndex]
+            $script:answerIndex++
+            return $value
+        }
+
+        $zones = Read-ZoneWizard -Inventory $inventory
+
+        $zones.Count | Should -Be 2
+        $zones[0].Name | Should -Be 'CPU'
+        $zones[0].FanSensors | Should -Be @(184)
+        $zones[0].TempSensors | Should -Be @(1)
+        $zones[1].Name | Should -Be 'System'
+        $zones[1].FanSensors | Should -Be @(185, 186)
+        $zones[1].TempSensors | Should -Be @(4, 8)
+    }
+
+    It 'stops as soon as every fan sensor is assigned, even without an empty-name entry' {
+        $script:answers = @('AllFans', '184,185,186', '1')
+        $script:answerIndex = 0
+        Mock -ModuleName FanCalibration Read-Host {
+            $value = $script:answers[$script:answerIndex]
+            $script:answerIndex++
+            return $value
+        }
+
+        $zones = Read-ZoneWizard -Inventory $inventory
+
+        $zones.Count | Should -Be 1
+        $zones[0].FanSensors | Should -Be @(184, 185, 186)
+    }
+
+    It 'warns about fan sensors left unassigned when the operator ends early' {
+        $script:answers = @('CPU', '184', '1', '')
+        $script:answerIndex = 0
+        Mock -ModuleName FanCalibration Read-Host {
+            $value = $script:answers[$script:answerIndex]
+            $script:answerIndex++
+            return $value
+        }
+        Mock -ModuleName FanCalibration Write-Warning {}
+
+        Read-ZoneWizard -Inventory $inventory | Out-Null
+
+        Should -Invoke -ModuleName FanCalibration Write-Warning -Times 1 -ParameterFilter {
+            $Message -match '185' -and $Message -match '186'
+        }
+    }
+}
