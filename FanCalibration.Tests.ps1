@@ -558,7 +558,7 @@ Describe 'Read-ZoneWizard' {
 
         $zones = Read-ZoneWizard -Inventory $inventory
 
-        Should -Invoke -ModuleName FanCalibration Read-Host -Times 3
+        Should -Invoke -ModuleName FanCalibration Read-Host -Times 3 -Exactly
 
         $zones.Count | Should -Be 1
         $zones[0].FanSensors | Should -Be @(184, 185, 186)
