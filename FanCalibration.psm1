@@ -233,9 +233,9 @@ function Read-ZoneConfig {
 function Save-ZoneConfig {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][array]$Zones
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Zones
     )
-    $Zones | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8
+    ConvertTo-Json -InputObject $Zones -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
 Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig

@@ -433,4 +433,18 @@ Describe 'Read-ZoneConfig and Save-ZoneConfig' {
         $loaded[1].FanSensors | Should -Be @(185, 186)
         $loaded[1].TempSensors | Should -Be @(4, 8, 14, 16)
     }
+
+    It 'round-trips a single zone without unwrapping to a bare object' {
+        $singleZone = @([pscustomobject]@{ Name = 'Solo'; FanSensors = @(184); TempSensors = @(1) })
+        Save-ZoneConfig -Path $testConfigPath -Zones $singleZone
+        $loaded = Read-ZoneConfig -Path $testConfigPath
+        $loaded.Count | Should -Be 1
+        $loaded[0].Name | Should -Be 'Solo'
+    }
+
+    It 'round-trips an empty zone list as an empty array, not a single null element' {
+        Save-ZoneConfig -Path $testConfigPath -Zones @()
+        $loaded = Read-ZoneConfig -Path $testConfigPath
+        $loaded.Count | Should -Be 0
+    }
 }
