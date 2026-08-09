@@ -408,3 +408,29 @@ Describe 'Get-BmcInventory' {
         }
     }
 }
+
+Describe 'Read-ZoneConfig and Save-ZoneConfig' {
+    BeforeAll {
+        $testConfigPath = Join-Path $TestDrive 'bmc-zones-test.json'
+    }
+
+    It 'returns $null when the file does not exist' {
+        Read-ZoneConfig -Path (Join-Path $TestDrive 'does-not-exist.json') | Should -BeNullOrEmpty
+    }
+
+    It 'round-trips zones through Save-ZoneConfig and Read-ZoneConfig' {
+        $zones = @(
+            [pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) }
+            [pscustomobject]@{ Name = 'SYS_FAN1+SYS_FAN2'; FanSensors = @(185, 186); TempSensors = @(4, 8, 14, 16) }
+        )
+
+        Save-ZoneConfig -Path $testConfigPath -Zones $zones
+        $loaded = Read-ZoneConfig -Path $testConfigPath
+
+        $loaded.Count | Should -Be 2
+        $loaded[0].Name | Should -Be 'CPU0_FAN'
+        $loaded[0].FanSensors | Should -Be @(184)
+        $loaded[1].FanSensors | Should -Be @(185, 186)
+        $loaded[1].TempSensors | Should -Be @(4, 8, 14, 16)
+    }
+}
