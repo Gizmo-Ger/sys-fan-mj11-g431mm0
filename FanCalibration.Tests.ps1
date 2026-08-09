@@ -320,6 +320,37 @@ Describe 'Invoke-FanSweep' {
             -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*existiert nicht*'
     }
 
+    It 'sweeps zones independently by array position even when zone Names collide' {
+        # Regression guard for the duplicate-Name data corruption bug: two
+        # zones sharing the same Name (e.g. both derived with empty
+        # arrFanSensor, or unvalidated wizard input) must still each get
+        # their own independent duty on the wire, keyed by index not Name.
+        $duplicateNamedZones = @(
+            [pscustomobject]@{ Name = 'DuplicateZone'; FanSensors = @(184); TempSensors = @(1) }
+            [pscustomobject]@{ Name = 'DuplicateZone'; FanSensors = @(185, 186); TempSensors = @(4, 8, 14, 16) }
+        )
+        $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
+
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+            -DutySteps @(20, 100) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $duplicateNamedZones `
+            -SleepCommand { param($Seconds) }
+
+        $rows.Count | Should -Be 6
+        $script:putBodies.Count | Should -Be 4
+
+        # first pass (zone index 0 under test): its duty tracks the sweep,
+        # the other same-named zone stays pinned at baseline.
+        $firstPassPuts = $script:putBodies[0..1]
+        $firstPassPuts.CpuInitDuty | Should -Be @(20, 100)
+        $firstPassPuts.SystemInitDuty | Should -Be @(50, 50)
+
+        # second pass (zone index 1 under test): duty tracks the sweep on
+        # the OTHER zone now, even though both zones share the same Name.
+        $secondPassPuts = $script:putBodies[2..3]
+        $secondPassPuts.SystemInitDuty | Should -Be @(20, 100)
+        $secondPassPuts.CpuInitDuty | Should -Be @(50, 50)
+    }
+
     It 'retries a sentinel sensor reading once and recovers a healthy value on the retry' {
         $sentinelThenHealthy = @(
             [pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN'; raw_reading = 252; reading = -4.0 }
@@ -439,6 +470,20 @@ Describe 'Read-ZoneConfig and Save-ZoneConfig' {
         Save-ZoneConfig -Path $testConfigPath -Zones @()
         $loaded = Read-ZoneConfig -Path $testConfigPath
         $loaded.Count | Should -Be 0
+    }
+
+    It 'throws a clear message naming the file when the JSON is malformed' {
+        $malformedPath = Join-Path $TestDrive 'bmc-zones-malformed.json'
+        Set-Content -LiteralPath $malformedPath -Value '{ "Name": "broken", ' -Encoding utf8
+
+        { Read-ZoneConfig -Path $malformedPath } | Should -Throw -ExpectedMessage "*$malformedPath*"
+    }
+
+    It 'throws a clear message naming the file when an entry is missing required fields' {
+        $missingFieldPath = Join-Path $TestDrive 'bmc-zones-missing-field.json'
+        Set-Content -LiteralPath $missingFieldPath -Value '[{"Name":"CPU0_FAN","TempSensors":[1]}]' -Encoding utf8
+
+        { Read-ZoneConfig -Path $missingFieldPath } | Should -Throw -ExpectedMessage "*$missingFieldPath*"
     }
 }
 
@@ -675,5 +720,64 @@ Describe 'Resolve-Zones' {
             -WizardCommand { param($Inventory) throw 'should not run wizard' }
 
         $result[0].Name | Should -Be 'CPU0_FAN'
+    }
+
+    It 'throws naming the duplicate when the wizard produces zones with the same Name' {
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
+        }
+        $duplicateWizardResult = @(
+            [pscustomobject]@{ Name = ''; FanSensors = @(184); TempSensors = @(1) }
+            [pscustomobject]@{ Name = ''; FanSensors = @(185); TempSensors = @(4) }
+        )
+
+        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+            -ConfigPath $configPath -WizardCommand { param($Inventory) $duplicateWizardResult } } |
+            Should -Throw -ExpectedMessage '*doppelte*'
+    }
+
+    It 'throws naming the duplicate when the profile-derived zones share the same Name' {
+        $duplicateFanProfile = [pscustomobject]@{
+            strMode    = 'quiet'
+            arrProfile = @([pscustomobject]@{
+                strName   = 'quiet'
+                arrPolicy = @(
+                    [pscustomobject]@{ arrFanSensor = @(); arrSensor = @(1) }
+                    [pscustomobject]@{ arrFanSensor = @(); arrSensor = @(4) }
+                )
+            })
+        }
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{
+                FanSensors  = @([pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN' })
+                TempSensors = @([pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP' })
+            }
+        }
+
+        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $duplicateFanProfile `
+            -ConfigPath $configPath } | Should -Throw -ExpectedMessage '*doppelte*'
+    }
+
+    It 'throws a clear message instead of propagating a null wizard result when the operator aborts with fans available' {
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{
+                FanSensors  = @([pscustomobject]@{ sensor_number = 184; name = 'CPU0_FAN' })
+                TempSensors = @([pscustomobject]@{ sensor_number = 1; name = 'CPU0_TEMP' })
+            }
+        }
+
+        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+            -ConfigPath $configPath -WizardCommand { param($Inventory) $null } } |
+            Should -Throw -ExpectedMessage '*abgebrochen*'
+    }
+
+    It 'throws a clear message distinguishing an empty BMC inventory from an aborted wizard' {
+        Mock -ModuleName FanCalibration Get-BmcInventory {
+            return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
+        }
+
+        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+            -ConfigPath $configPath -WizardCommand { param($Inventory) $null } } |
+            Should -Throw -ExpectedMessage '*keine Fan-Sensoren*'
     }
 }
