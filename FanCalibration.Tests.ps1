@@ -59,44 +59,52 @@ Describe 'Get-FanRpm' {
 Describe 'Get-ZoneTemplate' {
     BeforeAll {
         $fanProfileResponse = [pscustomobject]@{
-            strMode = 'quiet'
-            strVersion = '1.00'
+            strMode    = 'quiet'
             arrProfile = @(
                 [pscustomobject]@{
-                    strName = 'default'; strVersion = '1.00'
-                    arrPolicy = @([pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1) })
-                }
-                [pscustomobject]@{
-                    strName = 'quiet'; strVersion = '1.00'
+                    strName   = 'quiet'
                     arrPolicy = @(
-                        [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1); iSensorCode = 1 }
-                        [pscustomobject]@{ arrFanSensor = @(185,186); arrSensor = @(4,8,14,16); iSensorCode = 3 }
+                        [pscustomobject]@{ arrFanSensor = @(184); arrSensor = @(1); iSensorCode = 1; iHysteresis = 3 }
+                        [pscustomobject]@{ arrFanSensor = @(185, 186); arrSensor = @(4, 8, 14, 16); iSensorCode = 3; iHysteresis = 4 }
                     )
                 }
             )
         }
     }
 
-    It 'finds the CPU zone policy in the active profile' {
-        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 184
-        $result.arrFanSensor | Should -Be @(184)
+    It 'finds an existing policy whose arrFanSensor overlaps the zone' {
+        $zone = [pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) }
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -Zone $zone
         $result.iSensorCode | Should -Be 1
+        $result.iHysteresis | Should -Be 3
     }
-    It 'finds the System zone policy in the active profile' {
-        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 185
-        $result.arrFanSensor | Should -Be @(185,186)
+
+    It 'finds an existing policy via partial overlap (zone has more fans than the policy)' {
+        $zone = [pscustomobject]@{ Name = 'Sys'; FanSensors = @(185, 186, 999); TempSensors = @() }
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -Zone $zone
         $result.iSensorCode | Should -Be 3
     }
-    It 'throws when no policy matches the requested fan sensor' {
-        { Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -FanSensorNumber 999 } | Should -Throw
+
+    It 'falls back to a default policy skeleton when no policy matches, single temp sensor' {
+        $zone = [pscustomobject]@{ Name = 'NewZone'; FanSensors = @(999); TempSensors = @(1) }
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -Zone $zone
+        $result.iPolicyType | Should -Be 2
+        $result.iSensorCode | Should -Be 1
+        $result.arrFanSensor | Should -Be @(999)
+        $result.arrSensor | Should -Be @(1)
     }
-    It 'throws when the active profile is not found in arrProfile' {
-        $badResponse = [pscustomobject]@{
-            strMode = 'nonexistent'
-            strVersion = '1.00'
-            arrProfile = $fanProfileResponse.arrProfile
-        }
-        { Get-ZoneTemplate -FanProfileResponse $badResponse -FanSensorNumber 184 } | Should -Throw
+
+    It 'falls back to a default policy skeleton with iSensorCode 3 for multiple temp sensors' {
+        $zone = [pscustomobject]@{ Name = 'NewZone'; FanSensors = @(999); TempSensors = @(1, 4) }
+        $result = Get-ZoneTemplate -FanProfileResponse $fanProfileResponse -Zone $zone
+        $result.iSensorCode | Should -Be 3
+    }
+
+    It 'falls back to the default skeleton when the active profile itself is not found' {
+        $noProfile = [pscustomobject]@{ strMode = 'missing'; arrProfile = @() }
+        $zone = [pscustomobject]@{ Name = 'NewZone'; FanSensors = @(184); TempSensors = @(1) }
+        $result = Get-ZoneTemplate -FanProfileResponse $noProfile -Zone $zone
+        $result.iPolicyType | Should -Be 2
     }
 }
 

@@ -29,21 +29,37 @@ function Get-FanRpm {
 function Get-ZoneTemplate {
     param(
         [Parameter(Mandatory)][pscustomobject]$FanProfileResponse,
-        [Parameter(Mandatory)][int]$FanSensorNumber
+        [Parameter(Mandatory)][pscustomobject]$Zone
     )
     $activeProfile = $FanProfileResponse.arrProfile |
         Where-Object { $_.strName -eq $FanProfileResponse.strMode } |
         Select-Object -First 1
-    if (-not $activeProfile) {
-        throw "Aktives Profil '$($FanProfileResponse.strMode)' nicht in arrProfile gefunden."
+
+    if ($activeProfile) {
+        $policy = $activeProfile.arrPolicy | Where-Object {
+            $policyFans = @($_.arrFanSensor)
+            @($Zone.FanSensors | Where-Object { $_ -in $policyFans }).Count -gt 0
+        } | Select-Object -First 1
+        if ($policy) { return $policy }
     }
-    $policy = $activeProfile.arrPolicy |
-        Where-Object { $FanSensorNumber -in $_.arrFanSensor } |
-        Select-Object -First 1
-    if (-not $policy) {
-        throw "Keine Policy fuer Fan-Sensor $FanSensorNumber im aktiven Profil gefunden."
+
+    return [pscustomobject]@{
+        iPolicyType        = 2
+        iInSDR             = 1
+        iSensorCode        = if (@($Zone.TempSensors).Count -gt 1) { 3 } else { 1 }
+        iInitDuty          = 40
+        iCpuTdp            = 0
+        iAmbientSensor     = 0
+        iAmbientSensorTemp = 0
+        arrSensor          = @($Zone.TempSensors)
+        arrFanSensor       = @($Zone.FanSensors)
+        arrRef             = @()
+        arrDuty            = @()
+        arrHexVendorID     = @()
+        arrHexDeviceID     = @()
+        iPCIEDeviceEnable  = 0
+        iHysteresis        = 0
     }
-    return $policy
 }
 
 function New-CalibrationProfileBody {
