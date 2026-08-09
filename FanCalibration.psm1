@@ -373,7 +373,7 @@ function Resolve-Zones {
         }
         else {
             $wizardZones = & $WizardCommand $inventory
-            if (@($wizardZones).Count -eq 0) {
+            if ($null -eq $wizardZones -or @($wizardZones).Count -eq 0) {
                 if (@($inventory.FanSensors).Count -eq 0) {
                     throw "BMC meldet keine Fan-Sensoren - Zonen-Konfiguration nicht moeglich."
                 }
