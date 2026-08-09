@@ -303,7 +303,7 @@ Describe 'Invoke-FanSweep' {
 
         { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*calibration*'
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*steht noch auf*'
     }
 
     It 'throws when the calibration profile collection does not exist yet on the BMC' {
@@ -317,7 +317,7 @@ Describe 'Invoke-FanSweep' {
 
         { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*calibration*'
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*existiert nicht*'
     }
 
     It 'retries a sentinel sensor reading once and recovers a healthy value on the retry' {
