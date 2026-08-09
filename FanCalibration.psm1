@@ -143,14 +143,9 @@ function Invoke-FanSweep {
         [Parameter(Mandatory)][int[]]$DutySteps,
         [Parameter(Mandatory)][int]$BaselineDutyPercent,
         [Parameter(Mandatory)][int]$SettleSeconds,
+        [Parameter(Mandatory)][array]$Zones,
         [scriptblock]$SleepCommand = { param($Seconds) Start-Sleep -Seconds $Seconds }
     )
-
-    $zones = @(
-        @{ Name = 'CPU';    FanSensorNumbers = @(184) }
-        @{ Name = 'System'; FanSensorNumbers = @(185, 186) }
-    )
-    $fanNames = @{ 184 = 'CPU0_FAN'; 185 = 'SYS_FAN1'; 186 = 'SYS_FAN2' }
 
     $fanProfile = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/settings/fanprofile' -Method 'Get'
     $originalMode = $fanProfile.strMode
@@ -158,23 +153,23 @@ function Invoke-FanSweep {
     if ($originalMode -eq 'calibration') {
         throw "BMC steht noch auf 'calibration' (vorheriger Lauf abgebrochen). Bitte erst manuell auf 'quiet'/'default' zurueckschalten."
     }
-
     if (-not ($fanProfile.arrProfile | Where-Object { $_.strName -eq 'calibration' })) {
         throw "Profil 'calibration' existiert nicht auf dem BMC. Einmalig anlegen: POST /api/settings/fanprofile/collection mit Body {`"strName`":`"calibration`",...}"
     }
 
-    $cpuTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 184
-    $systemTemplate = Get-ZoneTemplate -FanProfileResponse $fanProfile -FanSensorNumber 185
+    $zoneTemplates = @{}
+    foreach ($zone in $Zones) {
+        $zoneTemplates[$zone.Name] = Get-ZoneTemplate -FanProfileResponse $fanProfile -Zone $zone
+    }
 
     try {
-        foreach ($zone in $zones) {
+        foreach ($zoneUnderTest in $Zones) {
             foreach ($duty in $DutySteps) {
-                $cpuDuty = if ($zone.Name -eq 'CPU') { $duty } else { $BaselineDutyPercent }
-                $sysDuty = if ($zone.Name -eq 'System') { $duty } else { $BaselineDutyPercent }
-
-                $cpuPolicy = New-FlatCurvePolicy -SourcePolicy $cpuTemplate -DutyPercent $cpuDuty
-                $sysPolicy = New-FlatCurvePolicy -SourcePolicy $systemTemplate -DutyPercent $sysDuty
-                $body = New-CalibrationProfileBody -CpuZonePolicy $cpuPolicy -SystemZonePolicy $sysPolicy
+                $zonePolicies = foreach ($zone in $Zones) {
+                    $d = if ($zone.Name -eq $zoneUnderTest.Name) { $duty } else { $BaselineDutyPercent }
+                    New-FlatCurvePolicy -SourcePolicy $zoneTemplates[$zone.Name] -DutyPercent $d
+                }
+                $body = New-CalibrationProfileBody -ZonePolicies $zonePolicies
 
                 Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
                     -Path '/api/settings/fanprofile/collection/calibration' -Method 'Put' -Body $body | Out-Null
@@ -185,25 +180,25 @@ function Invoke-FanSweep {
 
                 $sensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
 
-                $rpmBySensor = @{}
-                $missingSensorNumbers = @()
-                foreach ($sensorNumber in $zone.FanSensorNumbers) {
-                    $rpm = Get-FanRpm -Sensors $sensors -SensorNumber $sensorNumber
-                    $rpmBySensor[$sensorNumber] = $rpm
-                    if ($null -eq $rpm) { $missingSensorNumbers += $sensorNumber }
-                }
-
+                $missingSensorNumbers = @($zoneUnderTest.FanSensors | Where-Object {
+                    $null -eq (Get-FanRpm -Sensors $sensors -SensorNumber $_)
+                })
                 if ($missingSensorNumbers.Count -gt 0) {
                     & $SleepCommand 3
                     $retrySensors = Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost -Path '/api/sensors' -Method 'Get'
                     foreach ($sensorNumber in $missingSensorNumbers) {
-                        $rpmBySensor[$sensorNumber] = Get-FanRpm -Sensors $retrySensors -SensorNumber $sensorNumber
+                        $retryReading = $retrySensors | Where-Object { $_.sensor_number -eq $sensorNumber } | Select-Object -First 1
+                        if ($retryReading -and $null -ne (Get-FanRpm -Sensors $retrySensors -SensorNumber $sensorNumber)) {
+                            $sensors = @($sensors | Where-Object { $_.sensor_number -ne $sensorNumber }) + @($retryReading)
+                        }
                     }
                 }
 
-                foreach ($sensorNumber in $zone.FanSensorNumbers) {
-                    New-CalibrationCsvRow -Zone $zone.Name -DutyPercent $duty `
-                        -FanName $fanNames[$sensorNumber] -Rpm $rpmBySensor[$sensorNumber]
+                foreach ($sensorNumber in $zoneUnderTest.FanSensors) {
+                    $sensorObj = $sensors | Where-Object { $_.sensor_number -eq $sensorNumber } | Select-Object -First 1
+                    $fanName = if ($sensorObj) { $sensorObj.name } else { "sensor$sensorNumber" }
+                    $rpm = Get-FanRpm -Sensors $sensors -SensorNumber $sensorNumber
+                    New-CalibrationCsvRow -Zone $zoneUnderTest.Name -DutyPercent $duty -FanName $fanName -Rpm $rpm
                 }
             }
         }
