@@ -202,6 +202,7 @@ Describe 'Invoke-BmcApi' {
 Describe 'Invoke-FanSweep' {
     BeforeEach {
         $script:modeCalls = @()
+        $script:putBodies = @()
         $fanProfileResponse = [pscustomobject]@{
             strMode    = 'quiet'
             arrProfile = @([pscustomobject]@{
@@ -230,6 +231,13 @@ Describe 'Invoke-FanSweep' {
             switch ("$Method $Path") {
                 'Get /api/settings/fanprofile' { return $fanProfileWithCalibration }
                 'Get /api/sensors'             { return $sensorsResponse }
+                'Put /api/settings/fanprofile/collection/calibration' {
+                    $script:putBodies += [pscustomobject]@{
+                        CpuInitDuty    = $Body.arrPolicy[0].iInitDuty
+                        SystemInitDuty = $Body.arrPolicy[1].iInitDuty
+                    }
+                    return $Body
+                }
                 'Post /api/settings/fanprofile/mode' { $script:modeCalls += $Body.strMode; return [pscustomobject]@{ strMode = $Body.strMode } }
                 default { return $null }
             }
@@ -249,6 +257,21 @@ Describe 'Invoke-FanSweep' {
         ($rows | Where-Object { $_.FanName -eq 'CPU0_FAN' -and $_.DutyPercent -eq 50 }).RPM | Should -Be '1350'
         $script:modeCalls | Should -Contain 'calibration'
         $script:modeCalls[-1] | Should -Be 'quiet'
+
+        # zone isolation on the wire: 6 PUT calls total (3 duty steps x 2 zones).
+        $script:putBodies.Count | Should -Be 6
+
+        # first 3 PUTs are the CPU0_FAN-zone pass: its duty tracks the sweep
+        # value, the other zone's duty stays pinned at the baseline (50).
+        $cpuPassPuts = $script:putBodies[0..2]
+        $cpuPassPuts.CpuInitDuty | Should -Be @(20, 50, 100)
+        $cpuPassPuts.SystemInitDuty | Should -Be @(50, 50, 50)
+
+        # last 3 PUTs are the SYS_FAN1+SYS_FAN2-zone pass: its duty tracks the
+        # sweep value, the other zone's duty stays pinned at the baseline (50).
+        $systemPassPuts = $script:putBodies[3..5]
+        $systemPassPuts.SystemInitDuty | Should -Be @(20, 50, 100)
+        $systemPassPuts.CpuInitDuty | Should -Be @(50, 50, 50)
     }
 
     It 'still restores the original mode when a sensor read fails mid-sweep' {
@@ -280,7 +303,7 @@ Describe 'Invoke-FanSweep' {
 
         { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*calibration*'
     }
 
     It 'throws when the calibration profile collection does not exist yet on the BMC' {
@@ -294,7 +317,7 @@ Describe 'Invoke-FanSweep' {
 
         { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*calibration*'
     }
 
     It 'retries a sentinel sensor reading once and recovers a healthy value on the retry' {
