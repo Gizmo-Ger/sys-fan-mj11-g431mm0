@@ -558,8 +558,29 @@ Describe 'Read-ZoneWizard' {
 
         $zones = Read-ZoneWizard -Inventory $inventory
 
+        Should -Invoke -ModuleName FanCalibration Read-Host -Times 3
+
         $zones.Count | Should -Be 1
         $zones[0].FanSensors | Should -Be @(184, 185, 186)
+    }
+
+    It 'skips non-numeric sensor tokens via TryParse, warns, and does not crash' {
+        $script:answers = @('Mixed', '184,abc,185,186', '1')
+        $script:answerIndex = 0
+        Mock -ModuleName FanCalibration Read-Host {
+            $value = $script:answers[$script:answerIndex]
+            $script:answerIndex++
+            return $value
+        }
+        Mock -ModuleName FanCalibration Write-Warning {}
+
+        $zones = Read-ZoneWizard -Inventory $inventory
+
+        $zones.Count | Should -Be 1
+        $zones[0].FanSensors | Should -Be @(184, 185, 186)
+        Should -Invoke -ModuleName FanCalibration Write-Warning -Times 1 -ParameterFilter {
+            $Message -match "'abc'"
+        }
     }
 
     It 'warns about fan sensors left unassigned when the operator ends early' {

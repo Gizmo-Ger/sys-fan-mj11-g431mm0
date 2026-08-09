@@ -282,10 +282,24 @@ function Read-ZoneWizard {
         if ([string]::IsNullOrWhiteSpace($name)) { break }
 
         $fanInput = Read-Host 'Fan-Sensor-Nummern (kommagetrennt)'
-        $fanNums = @($fanInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+        $fanNums = @($fanInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object {
+            $parsed = 0
+            if ([int]::TryParse($_, [ref]$parsed)) {
+                $parsed
+            } else {
+                Write-Warning "Ungueltige Sensor-Nummer ignoriert: '$_'"
+            }
+        })
 
         $tempInput = Read-Host 'Temp-Sensor-Nummern (kommagetrennt, optional)'
-        $tempNums = @($tempInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+        $tempNums = @($tempInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object {
+            $parsed = 0
+            if ([int]::TryParse($_, [ref]$parsed)) {
+                $parsed
+            } else {
+                Write-Warning "Ungueltige Sensor-Nummer ignoriert: '$_'"
+            }
+        })
 
         $zones += [pscustomobject]@{ Name = $name; FanSensors = $fanNums; TempSensors = $tempNums }
         $assignedFans += $fanNums
