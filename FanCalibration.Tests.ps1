@@ -109,17 +109,23 @@ Describe 'Get-ZoneTemplate' {
 }
 
 Describe 'New-CalibrationProfileBody' {
-    It 'builds the calibration collection body from two zone policies' {
+    It 'builds the calibration collection body from any number of zone policies' {
         $cpu = [pscustomobject]@{ arrFanSensor = @(184) }
-        $sys = [pscustomobject]@{ arrFanSensor = @(185,186) }
+        $sys = [pscustomobject]@{ arrFanSensor = @(185, 186) }
+        $extra = [pscustomobject]@{ arrFanSensor = @(187) }
 
-        $body = New-CalibrationProfileBody -CpuZonePolicy $cpu -SystemZonePolicy $sys
+        $body = New-CalibrationProfileBody -ZonePolicies @($cpu, $sys, $extra)
 
         $body.strName | Should -Be 'calibration'
         $body.strVersion | Should -Be '1.00'
-        $body.arrPolicy.Count | Should -Be 2
-        $body.arrPolicy[0].arrFanSensor | Should -Be @(184)
-        $body.arrPolicy[1].arrFanSensor | Should -Be @(185,186)
+        $body.arrPolicy.Count | Should -Be 3
+        $body.arrPolicy[2].arrFanSensor | Should -Be @(187)
+    }
+
+    It 'works with exactly one zone policy' {
+        $only = [pscustomobject]@{ arrFanSensor = @(184) }
+        $body = New-CalibrationProfileBody -ZonePolicies @($only)
+        $body.arrPolicy.Count | Should -Be 1
     }
 }
 

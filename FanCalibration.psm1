@@ -64,13 +64,12 @@ function Get-ZoneTemplate {
 
 function New-CalibrationProfileBody {
     param(
-        [Parameter(Mandatory)][pscustomobject]$CpuZonePolicy,
-        [Parameter(Mandatory)][pscustomobject]$SystemZonePolicy
+        [Parameter(Mandatory)][array]$ZonePolicies
     )
     return [pscustomobject]@{
         strName    = 'calibration'
         strVersion = '1.00'
-        arrPolicy  = @($CpuZonePolicy, $SystemZonePolicy)
+        arrPolicy  = @($ZonePolicies)
     }
 }
 
