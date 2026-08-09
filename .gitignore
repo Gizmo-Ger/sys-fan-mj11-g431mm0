@@ -7,3 +7,4 @@ esp32-mj11-uart-gateway/**/*.bin
 .worktrees/
 .superpowers/
 fan-calibration-*.csv
+bmc-zones-*.json
