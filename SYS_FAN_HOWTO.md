@@ -13,6 +13,13 @@ Also credit to Oliver Obenland, who wrote up the same issue independently
 (February 2024):
 https://oliver.obenland.it/gigabyte-mj11-ec1-alle-luefter-per-pwm-steuern/
 
+**Note on IPs in this document**: this is a forensic investigation log, not
+a general-purpose tool — a few commands below show the author's own lab
+BMC's real address (`192.168.178.21`, RFC 1918, not internet-routable)
+because the exact request/response pair mattered to the finding at that
+point. Left as-is intentionally, unlike the generic `<bmc-ip>` placeholder
+used everywhere else in this doc.
+
 ## Background
 
 Gigabyte's MJ11-EC1 baseboard ships inside the G431-MM0 GPU mining chassis under a
@@ -310,6 +317,19 @@ at similar temperatures.
   "Two tools, two very different behaviors" above. Root cause was BMC-gated
   power sequencing, not flash corruption — `-dump` is read-only and cannot
   corrupt anything.
+
+  **Update:** the `ProductName`/`FanProfile` edit above only ever rewrote
+  `ProductName` — `BoardProductName` (a separate FRU field, populated twice
+  like `ProductName`: once in `<FRU>`, once in `<PROJECT>`) was left stuck at
+  the pre-edit value by a bug in `build_sku_bin.sh`'s `replace_all_uniform()`
+  call, silently, for as long as this fix has been live on production.
+  Confirmed via the BMC's own web UI FRU page and a byte-for-byte structural
+  diff of the flashed vs. rebuilt `SKU.xml` — exactly the two
+  `BoardProductName` occurrences differed from `ProductName`, nothing else.
+  Fixed in `build_sku_bin.sh` (commit `c8d633c`); production's `SKU.xml` has
+  since been rebuilt and reflashed with the corrected script, with the same
+  before/after board-identity verification as above. `BoardProductName` now
+  matches `ProductName` on both spare and production.
 
 ## `sysadmin` SSH lockout — root cause confirmed
 
