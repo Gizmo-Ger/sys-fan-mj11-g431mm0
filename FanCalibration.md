@@ -2,8 +2,10 @@
 
 - **[Calibrate-FanCurve.ps1](Calibrate-FanCurve.ps1)** — sweeps PWM duty per
   fan zone on the BMC and records the resulting RPM to a CSV, using an
-  isolated `calibration` fan-profile collection so it never touches the live
-  `default`/`quiet` profiles. Zones aren't fixed to a CPU/System split — the
+  isolated `calibration` fan-profile collection so it never touches whatever
+  profile you actually run live (`default`, or a custom one you've set up —
+  e.g. `quiet` isn't a stock BMC profile, just an example of a user-created
+  one). Zones aren't fixed to a CPU/System split — the
   tool derives however many zones the BMC's own fan-profile policies define
   (or however many you set up in the wizard), so it works on any board behind
   this REST API.
@@ -17,7 +19,7 @@ configuration is saved and reused per BMC instance.
 ## Example
 
 ```powershell
-pwsh ./Calibrate-FanCurve.ps1 -BmcHost 192.168.178.21
+pwsh ./Calibrate-FanCurve.ps1 -BmcHost <bmc-ip>
 ```
 
 You'll be prompted for BMC credentials (or pass `-Credential`). Results are
