@@ -55,11 +55,12 @@ Expected output (abbreviated):
     JFFS2 filesystem starts at offset 65536
     found: /tmp/.../BMC1/wolfpass/SKU.xml
 ==> Applying identity edit
-    ProductName -> MJ11-EC0-00
-    FanProfile  -> MJ11
+    ProductName      -> MJ11-EC0-00
+    BoardProductName -> MJ11-EC0-00
+    FanProfile       -> MJ11
 ==> Diff (identity fields only — everything else, including serials/MACs, is untouched)
     ProductName: ['G431-MM0-OT', 'G431-MM0-OT'] -> ['MJ11-EC0-00', 'MJ11-EC0-00'] *** CHANGED ***
-    BoardProductName: ['MJ11-EC1-OT', 'MJ11-EC1-OT'] -> ['MJ11-EC1-OT', 'MJ11-EC1-OT']
+    BoardProductName: ['MJ11-EC1-OT', 'MJ11-EC1-OT'] -> ['MJ11-EC0-00', 'MJ11-EC0-00'] *** CHANGED ***
     FanProfile: ['G431_MM0'] -> ['MJ11'] *** CHANGED ***
     BoardSerialNumber: ['AB1U9988776', '...'] -> ['AB1U9988776', '...']
     ProductSerialNumber: ['GXY9U1234B567', '...'] -> ['GXY9U1234B567', '...']
