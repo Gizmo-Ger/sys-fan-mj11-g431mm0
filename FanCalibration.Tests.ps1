@@ -150,11 +150,11 @@ Describe 'Connect-Bmc' {
         }
 
         $cred = [pscredential]::new('admin', (ConvertTo-SecureString 'password' -AsPlainText -Force))
-        $conn = Connect-Bmc -BmcHost '192.168.178.21' -Credential $cred
+        $conn = Connect-Bmc -BmcHost 'bmc.example.test' -Credential $cred
 
         $conn.CsrfToken | Should -Be 'abc123'
         Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
-            $Uri -eq 'https://192.168.178.21/api/session' -and
+            $Uri -eq 'https://bmc.example.test/api/session' -and
             $Method -eq 'Post' -and
             $Body.username -eq 'admin' -and
             $Body.password -eq 'password' -and
@@ -165,7 +165,7 @@ Describe 'Connect-Bmc' {
     It 'throws when the response has no CSRFToken' {
         Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ ok = 0 } }
         $cred = [pscredential]::new('admin', (ConvertTo-SecureString 'wrong' -AsPlainText -Force))
-        { Connect-Bmc -BmcHost '192.168.178.21' -Credential $cred } | Should -Throw
+        { Connect-Bmc -BmcHost 'bmc.example.test' -Credential $cred } | Should -Throw
     }
 }
 
@@ -174,11 +174,11 @@ Describe 'Invoke-BmcApi' {
         Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ result = 'ok' } }
         $conn = [pscustomobject]@{ WebSession = (New-Object Microsoft.PowerShell.Commands.WebRequestSession); CsrfToken = 'tok1' }
 
-        $result = Invoke-BmcApi -Connection $conn -BmcHost '192.168.178.21' -Path '/api/sensors'
+        $result = Invoke-BmcApi -Connection $conn -BmcHost 'bmc.example.test' -Path '/api/sensors'
 
         $result.result | Should -Be 'ok'
         Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
-            $Uri -eq 'https://192.168.178.21/api/sensors' -and
+            $Uri -eq 'https://bmc.example.test/api/sensors' -and
             $Method -eq 'Get' -and
             $Headers['X-CSRFTOKEN'] -eq 'tok1' -and
             $Headers['X-Requested-With'] -eq 'XMLHttpRequest'
@@ -189,7 +189,7 @@ Describe 'Invoke-BmcApi' {
         Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ strMode = 'calibration' } }
         $conn = [pscustomobject]@{ WebSession = (New-Object Microsoft.PowerShell.Commands.WebRequestSession); CsrfToken = 'tok1' }
 
-        Invoke-BmcApi -Connection $conn -BmcHost '192.168.178.21' -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = 'calibration' } | Out-Null
+        Invoke-BmcApi -Connection $conn -BmcHost 'bmc.example.test' -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = 'calibration' } | Out-Null
 
         Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
             $Method -eq 'Post' -and
@@ -246,7 +246,7 @@ Describe 'Invoke-FanSweep' {
 
     It 'sweeps N zones sequentially, holding every other zone at baseline, one row per duty per fan' {
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
-        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(20, 50, 100) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
             -SleepCommand { param($Seconds) }
 
@@ -285,7 +285,7 @@ Describe 'Invoke-FanSweep' {
         }
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
 
-        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        { Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
             -SleepCommand { param($Seconds) } } | Should -Throw
 
@@ -301,9 +301,9 @@ Describe 'Invoke-FanSweep' {
         }
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
 
-        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        { Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*steht noch auf*'
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*still set to*'
     }
 
     It 'throws when the calibration profile collection does not exist yet on the BMC' {
@@ -315,9 +315,9 @@ Describe 'Invoke-FanSweep' {
         }
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
 
-        { Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        { Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(20) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $zones `
-            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*existiert nicht*'
+            -SleepCommand { param($Seconds) } } | Should -Throw -ExpectedMessage '*does not exist*'
     }
 
     It 'sweeps zones independently by array position even when zone Names collide' {
@@ -331,7 +331,7 @@ Describe 'Invoke-FanSweep' {
         )
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
 
-        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(20, 100) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $duplicateNamedZones `
             -SleepCommand { param($Seconds) }
 
@@ -373,7 +373,7 @@ Describe 'Invoke-FanSweep' {
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
         $singleZone = @([pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) })
 
-        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(50) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $singleZone `
             -SleepCommand { param($Seconds) }
 
@@ -397,7 +397,7 @@ Describe 'Invoke-FanSweep' {
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
         $singleZone = @([pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) })
 
-        $rows = Invoke-FanSweep -Connection $conn -BmcHost '192.168.178.21' `
+        $rows = Invoke-FanSweep -Connection $conn -BmcHost 'bmc.example.test' `
             -DutySteps @(50) -BaselineDutyPercent 50 -SettleSeconds 1 -Zones $singleZone `
             -SleepCommand { param($Seconds) }
 
@@ -421,7 +421,7 @@ Describe 'Get-BmcInventory' {
         Mock -ModuleName FanCalibration Invoke-BmcApi { return $sensorsResponse }
         $conn = [pscustomobject]@{ WebSession = $null; CsrfToken = 'tok1' }
 
-        $inventory = Get-BmcInventory -Connection $conn -BmcHost '192.168.178.21'
+        $inventory = Get-BmcInventory -Connection $conn -BmcHost 'bmc.example.test'
 
         $inventory.FanSensors.Count | Should -Be 2
         $inventory.TempSensors.Count | Should -Be 2
@@ -641,7 +641,7 @@ Describe 'Read-ZoneWizard' {
 
 Describe 'Resolve-Zones' {
     BeforeAll {
-        $configPath = Join-Path $TestDrive 'bmc-zones-192.168.178.21.json'
+        $configPath = Join-Path $TestDrive 'bmc-zones-bmc.example.test.json'
         $sampleZones = @(
             [pscustomobject]@{ Name = 'CPU0_FAN'; FanSensors = @(184); TempSensors = @(1) }
         )
@@ -668,7 +668,7 @@ Describe 'Resolve-Zones' {
         Save-ZoneConfig -Path $configPath -Zones $sampleZones
         Mock -ModuleName FanCalibration Get-BmcInventory { throw 'should not be called' }
 
-        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
+        $result = Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
 
         $result[0].Name | Should -Be 'CPU0_FAN'
     }
@@ -681,7 +681,7 @@ Describe 'Resolve-Zones' {
             }
         }
 
-        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
+        $result = Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileWithPolicies -ConfigPath $configPath
 
         $result[0].Name | Should -Be 'CPU0_FAN'
         (Read-ZoneConfig -Path $configPath)[0].Name | Should -Be 'CPU0_FAN'
@@ -692,7 +692,7 @@ Describe 'Resolve-Zones' {
             return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
         }
 
-        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+        $result = Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileFresh `
             -ConfigPath $configPath -WizardCommand { param($Inventory) $wizardResult }
 
         $result[0].Name | Should -Be 'Wizard'
@@ -705,8 +705,8 @@ Describe 'Resolve-Zones' {
             return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
         }
 
-        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies `
-            -ConfigPath $configPath -NewDevice -ConfirmCommand { param($Message) 'j' } `
+        $result = Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileWithPolicies `
+            -ConfigPath $configPath -NewDevice -ConfirmCommand { param($Message) 'y' } `
             -WizardCommand { param($Inventory) $wizardResult }
 
         $result[0].Name | Should -Be 'Wizard'
@@ -715,7 +715,7 @@ Describe 'Resolve-Zones' {
     It '-NewDevice with declined overwrite falls back to the existing config' {
         Save-ZoneConfig -Path $configPath -Zones $sampleZones
 
-        $result = Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileWithPolicies `
+        $result = Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileWithPolicies `
             -ConfigPath $configPath -NewDevice -ConfirmCommand { param($Message) 'n' } `
             -WizardCommand { param($Inventory) throw 'should not run wizard' }
 
@@ -731,9 +731,9 @@ Describe 'Resolve-Zones' {
             [pscustomobject]@{ Name = ''; FanSensors = @(185); TempSensors = @(4) }
         )
 
-        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+        { Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileFresh `
             -ConfigPath $configPath -WizardCommand { param($Inventory) $duplicateWizardResult } } |
-            Should -Throw -ExpectedMessage '*doppelte*'
+            Should -Throw -ExpectedMessage '*duplicate*'
     }
 
     It 'throws naming the duplicate when the profile-derived zones share the same Name' {
@@ -754,8 +754,8 @@ Describe 'Resolve-Zones' {
             }
         }
 
-        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $duplicateFanProfile `
-            -ConfigPath $configPath } | Should -Throw -ExpectedMessage '*doppelte*'
+        { Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $duplicateFanProfile `
+            -ConfigPath $configPath } | Should -Throw -ExpectedMessage '*duplicate*'
     }
 
     It 'throws a clear message instead of propagating a null wizard result when the operator aborts with fans available' {
@@ -766,9 +766,9 @@ Describe 'Resolve-Zones' {
             }
         }
 
-        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+        { Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileFresh `
             -ConfigPath $configPath -WizardCommand { param($Inventory) $null } } |
-            Should -Throw -ExpectedMessage '*abgebrochen*'
+            Should -Throw -ExpectedMessage '*aborted*'
     }
 
     It 'throws a clear message distinguishing an empty BMC inventory from an aborted wizard' {
@@ -776,8 +776,8 @@ Describe 'Resolve-Zones' {
             return [pscustomobject]@{ FanSensors = @(); TempSensors = @() }
         }
 
-        { Resolve-Zones -Connection $conn -BmcHost '192.168.178.21' -FanProfileResponse $fanProfileFresh `
+        { Resolve-Zones -Connection $conn -BmcHost 'bmc.example.test' -FanProfileResponse $fanProfileFresh `
             -ConfigPath $configPath -WizardCommand { param($Inventory) $null } } |
-            Should -Throw -ExpectedMessage '*keine Fan-Sensoren*'
+            Should -Throw -ExpectedMessage '*no fan sensors*'
     }
 }
