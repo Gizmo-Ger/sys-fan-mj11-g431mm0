@@ -33,22 +33,22 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'FanCalibration.psm1') -Force
 
 if (-not $Credential) {
-    $Credential = Get-Credential -Message "BMC-Zugangsdaten fuer $BmcHost"
+    $Credential = Get-Credential -Message "BMC credentials for $BmcHost"
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $csvPath = Join-Path $OutDir "fan-calibration-$stamp.csv"
 $zoneConfigPath = Join-Path $PSScriptRoot "bmc-zones-$BmcHost.json"
 
-Write-Host "Verbinde mit $BmcHost ..."
+Write-Host "Connecting to $BmcHost ..."
 $connection = Connect-Bmc -BmcHost $BmcHost -Credential $Credential
 
 $fanProfile = Invoke-BmcApi -Connection $connection -BmcHost $BmcHost -Path '/api/settings/fanprofile' -Method 'Get'
 $zones = Resolve-Zones -Connection $connection -BmcHost $BmcHost -FanProfileResponse $fanProfile `
     -ConfigPath $zoneConfigPath -NewDevice:$NewDevice
 
-Write-Host "Zonen: $($zones.Name -join ', ')"
-Write-Host "Starte Sweep: Duty-Stufen $($DutySteps -join ', ')%, Settle ${SettleSeconds}s, Baseline ${BaselineDutyPercent}%"
+Write-Host "Zones: $($zones.Name -join ', ')"
+Write-Host "Starting sweep: duty steps $($DutySteps -join ', ')%, settle ${SettleSeconds}s, baseline ${BaselineDutyPercent}%"
 
 $rows = @()
 Invoke-FanSweep -Connection $connection -BmcHost $BmcHost `
@@ -59,8 +59,8 @@ Invoke-FanSweep -Connection $connection -BmcHost $BmcHost `
     }
 
 if (-not $rows) {
-    throw "Sweep lieferte keine Messwerte."
+    throw "Sweep produced no measurements."
 }
 
 $rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-Write-Host "Fertig. Ergebnisse: $csvPath"
+Write-Host "Done. Results: $csvPath"

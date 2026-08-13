@@ -104,7 +104,7 @@ function Connect-Bmc {
         -SessionVariable bmcSession -SkipCertificateCheck -TimeoutSec 15
 
     if (-not $response.CSRFToken) {
-        throw "BMC-Login fehlgeschlagen: keine CSRFToken in der Antwort."
+        throw "BMC login failed: no CSRFToken in the response."
     }
     return [pscustomobject]@{
         WebSession = $bmcSession
@@ -151,10 +151,10 @@ function Invoke-FanSweep {
     $originalMode = $fanProfile.strMode
 
     if ($originalMode -eq 'calibration') {
-        throw "BMC steht noch auf 'calibration' (vorheriger Lauf abgebrochen). Bitte erst manuell auf 'quiet'/'default' zurueckschalten."
+        throw "BMC is still set to 'calibration' (a previous run was aborted). Please switch it back to 'quiet'/'default' manually first."
     }
     if (-not ($fanProfile.arrProfile | Where-Object { $_.strName -eq 'calibration' })) {
-        throw "Profil 'calibration' existiert nicht auf dem BMC. Einmalig anlegen: POST /api/settings/fanprofile/collection mit Body {`"strName`":`"calibration`",...}"
+        throw "Profile 'calibration' does not exist on the BMC. Create it once with: POST /api/settings/fanprofile/collection with body {`"strName`":`"calibration`",...}"
     }
 
     $zoneTemplates = @($Zones | ForEach-Object { Get-ZoneTemplate -FanProfileResponse $fanProfile -Zone $_ })
@@ -207,7 +207,7 @@ function Invoke-FanSweep {
                 -Path '/api/settings/fanprofile/mode' -Method 'Post' -Body @{ strMode = $originalMode } | Out-Null
         }
         catch {
-            Write-Warning "ACHTUNG: Modus konnte nicht auf '$originalMode' zurueckgesetzt werden - BMC laeuft weiter auf 'calibration'! Manuell zuruecksetzen. ($_)"
+            Write-Warning "WARNING: mode could not be reset to '$originalMode' - BMC is still running in 'calibration'! Reset it manually. ($_)"
         }
     }
 }
@@ -239,11 +239,11 @@ function Read-ZoneConfig {
         $parsed = @(Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
     }
     catch {
-        throw "Zonen-Config '$Path' konnte nicht gelesen werden (ungueltiges JSON): $_"
+        throw "Zone config '$Path' could not be read (invalid JSON): $_"
     }
     foreach ($entry in $parsed) {
         if ($null -eq $entry.Name -or $entry.FanSensors -isnot [array] -or $entry.TempSensors -isnot [array]) {
-            throw "Zonen-Config '$Path' ist fehlerhaft: jeder Eintrag braucht Name, FanSensors (Array) und TempSensors (Array)."
+            throw "Zone config '$Path' is malformed: every entry needs Name, FanSensors (array) and TempSensors (array)."
         }
     }
     return $parsed
@@ -287,9 +287,9 @@ function New-ZonesFromProfile {
 function Read-ZoneWizard {
     param([Parameter(Mandatory)][pscustomobject]$Inventory)
 
-    Write-Host 'Fan-Sensoren:'
+    Write-Host 'Fan sensors:'
     foreach ($f in $Inventory.FanSensors) { Write-Host ("  {0}: {1}" -f $f.sensor_number, $f.name) }
-    Write-Host 'Temp-Sensoren:'
+    Write-Host 'Temperature sensors:'
     foreach ($t in $Inventory.TempSensors) { Write-Host ("  {0}: {1}" -f $t.sensor_number, $t.name) }
 
     $zones = @()
@@ -297,26 +297,26 @@ function Read-ZoneWizard {
     $allFanNumbers = @($Inventory.FanSensors.sensor_number)
 
     while (@($allFanNumbers | Where-Object { $_ -notin $assignedFans }).Count -gt 0) {
-        $name = Read-Host 'Zone-Name (leer = fertig)'
+        $name = Read-Host 'Zone name (empty = done)'
         if ([string]::IsNullOrWhiteSpace($name)) { break }
 
-        $fanInput = Read-Host 'Fan-Sensor-Nummern (kommagetrennt)'
+        $fanInput = Read-Host 'Fan sensor numbers (comma-separated)'
         $fanNums = @($fanInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object {
             $parsed = 0
             if ([int]::TryParse($_, [ref]$parsed)) {
                 $parsed
             } else {
-                Write-Warning "Ungueltige Sensor-Nummer ignoriert: '$_'"
+                Write-Warning "Ignoring invalid sensor number: '$_'"
             }
         })
 
-        $tempInput = Read-Host 'Temp-Sensor-Nummern (kommagetrennt, optional)'
+        $tempInput = Read-Host 'Temperature sensor numbers (comma-separated, optional)'
         $tempNums = @($tempInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } | ForEach-Object {
             $parsed = 0
             if ([int]::TryParse($_, [ref]$parsed)) {
                 $parsed
             } else {
-                Write-Warning "Ungueltige Sensor-Nummer ignoriert: '$_'"
+                Write-Warning "Ignoring invalid sensor number: '$_'"
             }
         })
 
@@ -326,7 +326,7 @@ function Read-ZoneWizard {
 
     $unassigned = @($allFanNumbers | Where-Object { $_ -notin $assignedFans })
     if ($unassigned.Count -gt 0) {
-        Write-Warning "Folgende Fan-Sensoren wurden keiner Zone zugeordnet: $($unassigned -join ', ')"
+        Write-Warning "The following fan sensors were not assigned to any zone: $($unassigned -join ', ')"
     }
 
     # Use the unary comma operator to keep this a single array object on the
@@ -353,8 +353,8 @@ function Resolve-Zones {
         $result = $existing
     }
     elseif ($existing -and $NewDevice) {
-        $answer = & $ConfirmCommand 'Bestehende Zonen-Config gefunden, wirklich ueberschreiben? (j/n)'
-        if ($answer -ne 'j') {
+        $answer = & $ConfirmCommand 'Existing zone config found, really overwrite? (y/n)'
+        if ($answer -ne 'y') {
             $result = $existing
         }
     }
@@ -375,9 +375,9 @@ function Resolve-Zones {
             $wizardZones = & $WizardCommand $inventory
             if ($null -eq $wizardZones -or @($wizardZones).Count -eq 0) {
                 if (@($inventory.FanSensors).Count -eq 0) {
-                    throw "BMC meldet keine Fan-Sensoren - Zonen-Konfiguration nicht moeglich."
+                    throw "BMC reports no fan sensors - zone configuration not possible."
                 }
-                throw "Zonen-Assistent abgebrochen - keine Zonen konfiguriert."
+                throw "Zone wizard aborted - no zones configured."
             }
             Save-ZoneConfig -Path $ConfigPath -Zones $wizardZones
             $result = $wizardZones
@@ -389,7 +389,7 @@ function Resolve-Zones {
     # corruption but duplicate names are still confusing/wrong in CSV output.
     $duplicateNames = @($result | Group-Object -Property Name | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
     if ($duplicateNames.Count -gt 0) {
-        throw "Zonen-Konfiguration enthaelt doppelte Zonen-Namen: $($duplicateNames -join ', ')"
+        throw "Zone configuration contains duplicate zone names: $($duplicateNames -join ', ')"
     }
 
     return $result
