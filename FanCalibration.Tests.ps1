@@ -127,6 +127,13 @@ Describe 'New-CalibrationProfileBody' {
         $body = New-CalibrationProfileBody -ZonePolicies @($only)
         $body.arrPolicy.Count | Should -Be 1
     }
+
+    It 'works with zero zone policies, for the bootstrap collection' {
+        $body = New-CalibrationProfileBody -ZonePolicies @()
+        $body.strName | Should -Be 'calibration'
+        $body.strVersion | Should -Be '1.00'
+        $body.arrPolicy.Count | Should -Be 0
+    }
 }
 
 Describe 'New-CalibrationCsvRow' {
@@ -195,6 +202,21 @@ Describe 'Invoke-BmcApi' {
             $Method -eq 'Post' -and
             $ContentType -eq 'application/json' -and
             $Body -eq '{"strMode":"calibration"}'
+        }
+    }
+}
+
+Describe 'New-CalibrationCollection' {
+    It 'POSTs the empty calibration collection body' {
+        Mock -ModuleName FanCalibration Invoke-RestMethod { return [pscustomobject]@{ strName = 'calibration' } }
+        $conn = [pscustomobject]@{ WebSession = (New-Object Microsoft.PowerShell.Commands.WebRequestSession); CsrfToken = 'tok1' }
+
+        New-CalibrationCollection -Connection $conn -BmcHost 'bmc.example.test' | Out-Null
+
+        Should -Invoke -ModuleName FanCalibration Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'https://bmc.example.test/api/settings/fanprofile/collection' -and
+            $Method -eq 'Post' -and
+            $Body -eq '{"strName":"calibration","strVersion":"1.00","arrPolicy":[]}'
         }
     }
 }

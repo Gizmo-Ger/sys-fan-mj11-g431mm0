@@ -14,13 +14,13 @@ param(
     must already exist before this script can write to it. If it doesn't yet,
     create it once with:
 
-        POST /api/settings/fanprofile/collection
-        Content-Type: application/json
-        {"strName":"calibration","strVersion":"1.00","arrPolicy":[]}
+        $conn = Connect-Bmc -BmcHost $BmcHost -Credential (Get-Credential)
+        New-CalibrationCollection -Connection $conn -BmcHost $BmcHost
 
-    (with whatever session cookie + X-CSRFTOKEN header your logged-in browser
-    session is using — see README.md for the full walkthrough). Invoke-FanSweep
-    will throw a clear error naming this requirement if it's missing.
+    (see FanCalibration.md for the full walkthrough, including the raw REST
+    fallback if you'd rather not import the module for this one-off step).
+    Invoke-FanSweep will throw a clear error naming this requirement if it's
+    missing.
 
     Zone configuration (which fan sensors share a PWM line, and which temp
     sensors drive them) is either read from an already-configured BMC's active

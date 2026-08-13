@@ -29,7 +29,20 @@ directory (override with `-OutDir`).
 ## One-time setup on a fresh BMC
 
 The `calibration` fan-profile collection must exist before the script's API
-calls will succeed. Create it once with this POST request:
+calls will succeed. Create it once — `Connect-Bmc` and `New-CalibrationCollection`
+handle the session/CSRF token for you, no browser dev tools needed:
+
+```powershell
+Import-Module ./FanCalibration.psm1
+$conn = Connect-Bmc -BmcHost <bmc-ip> -Credential (Get-Credential)
+New-CalibrationCollection -Connection $conn -BmcHost <bmc-ip>
+```
+
+The script's own preflight check will fail fast with this exact command if the
+collection is still missing, rather than silently failing mid-sweep.
+
+Prefer raw REST, or scripting this from something other than PowerShell?
+Equivalent request:
 
 ```
 POST /api/settings/fanprofile/collection
@@ -37,9 +50,8 @@ Content-Type: application/json
 {"strName":"calibration","strVersion":"1.00","arrPolicy":[]}
 ```
 
-Use your logged-in browser session's cookie + X-CSRFTOKEN header. The script's
-preflight check will fail fast with an explicit error if this collection is
-missing, rather than silently failing mid-sweep.
+Needs a valid session cookie + matching `X-CSRFTOKEN` header (e.g. from a
+logged-in browser session's dev tools).
 
 ## Zone configuration and `-NewDevice`
 

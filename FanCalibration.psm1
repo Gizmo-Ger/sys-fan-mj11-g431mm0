@@ -64,7 +64,7 @@ function Get-ZoneTemplate {
 
 function New-CalibrationProfileBody {
     param(
-        [Parameter(Mandatory)][array]$ZonePolicies
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ZonePolicies
     )
     return [pscustomobject]@{
         strName    = 'calibration'
@@ -136,6 +136,16 @@ function Invoke-BmcApi {
     return Invoke-RestMethod @params
 }
 
+function New-CalibrationCollection {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Connection,
+        [Parameter(Mandatory)][string]$BmcHost
+    )
+    $body = New-CalibrationProfileBody -ZonePolicies @()
+    return Invoke-BmcApi -Connection $Connection -BmcHost $BmcHost `
+        -Path '/api/settings/fanprofile/collection' -Method 'Post' -Body $body
+}
+
 function Invoke-FanSweep {
     param(
         [Parameter(Mandatory)][pscustomobject]$Connection,
@@ -154,7 +164,7 @@ function Invoke-FanSweep {
         throw "BMC is still set to 'calibration' (a previous run was aborted). Please switch it back to 'quiet'/'default' manually first."
     }
     if (-not ($fanProfile.arrProfile | Where-Object { $_.strName -eq 'calibration' })) {
-        throw "Profile 'calibration' does not exist on the BMC. Create it once with: POST /api/settings/fanprofile/collection with body {`"strName`":`"calibration`",...}"
+        throw "Profile 'calibration' does not exist on the BMC. Create it once with: New-CalibrationCollection -Connection `$connection -BmcHost '$BmcHost'"
     }
 
     $zoneTemplates = @($Zones | ForEach-Object { Get-ZoneTemplate -FanProfileResponse $fanProfile -Zone $_ })
@@ -395,4 +405,4 @@ function Resolve-Zones {
     return $result
 }
 
-Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard, Resolve-Zones
+Export-ModuleMember -Function New-FlatCurvePolicy, Test-SentinelReading, Get-FanRpm, Get-ZoneTemplate, New-CalibrationProfileBody, New-CalibrationCsvRow, Connect-Bmc, Invoke-BmcApi, New-CalibrationCollection, Invoke-FanSweep, Get-BmcInventory, Read-ZoneConfig, Save-ZoneConfig, New-ZonesFromProfile, Read-ZoneWizard, Resolve-Zones
